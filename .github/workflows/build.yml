@@ -1,0 +1,31 @@
+name: build
+
+on:
+  push:
+
+jobs:
+  build:
+    # ion-shim targets Windows only (LOCALAPPDATA, CreateProcess, etc.)
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Built from the Certo master branch, not a tagged release: the
+      # Process.execInherit and getCurrentDir primitives this shim needs
+      # aren't in a release yet.
+      - name: Install Certo compiler
+        run: cargo install --git https://github.com/rjreeves/Certo certo
+
+      - name: Type-check ion-shim
+        run: certo check src/ion_shim.cto
+
+      - name: Build ion-shim
+        run: certo src/ion_shim.cto -o ion_shim.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ion_shim
+          path: ion_shim.exe
