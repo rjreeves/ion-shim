@@ -1,0 +1,148 @@
+module ion_shim
+
+import Stdlib.Core
+import Stdlib.Text
+import Stdlib.File
+import Stdlib.Path
+import Stdlib.Env
+import Stdlib.Process
+import Stdlib.Collections
+
+fn fatal(msg: Text): Unit [io] = {
+    eprintln("ion-shim: " ++ msg)
+    flush()
+    Process.quit(127)
+}
+
+// `??` eagerly evaluates its right-hand side even when the left side is
+// `Some(...)` (confirmed compiler bug, reported separately) — so an
+// [io]-effecting fallback like `fatal` must be reached through `match`,
+// which is verified to only run the arm that's actually taken.
+fn unwrapOrFatal(opt: Text?, msg: Text): Text [io] =
+    match opt {
+        Some(v) => v
+        None => {
+            fatal(msg)
+            ""
+        }
+    }
+
+fn stripQuotes(s: Text): Text =
+    if Text.startsWith(s, "\"") and Text.endsWith(s, "\"") and Text.len(s) >= 2
+    then Text.slice(s, 1, Text.len(s) - 1)
+    else s
+
+type KeyValue = { key: Text, value: Text }
+
+// Same flat `key = "value"` subset used for shim descriptors, reused here
+// for project pin files (`ion.toml`).
+fn parseKVLine(line: Text): KeyValue? = {
+    let trimmed = Text.trim(line)
+    if Text.len(trimmed) == 0 or Text.startsWith(trimmed, "#") then None
+    else match Text.indexOf(trimmed, "=") {
+        Some(eq) => Some(KeyValue {
+            key: Text.trim(Text.slice(trimmed, 0, eq)),
+            value: stripQuotes(Text.trim(Text.slice(trimmed, eq + 1, Text.len(trimmed))))
+        })
+        None => None
+    }
+}
+
+fn findKeyIn(content: Text, wantedKey: Text): Text? = {
+    var result: Text? = None
+    for line in Text.split(content, "\n") {
+        match parseKVLine(line) {
+            Some(kv) => {
+                if kv.key == wantedKey then { result = Some(kv.value) } else {}
+            }
+            None => {}
+        }
+    }
+    result
+}
+
+// Walks up from `dir` looking for the nearest `ion.toml`. The first one
+// found is the project root: if it pins `toolName`, that wins; if it
+// exists but doesn't mention `toolName`, we stop there anyway (it's still
+// the project boundary) and fall back to the global `ion use` version.
+fn climbForPin(dir: Text, toolName: Text): Text? = {
+    let candidate = Path.join(dir, "ion.toml")
+    match readFile(candidate) {
+        Some(content) => findKeyIn(content, toolName)
+        None => {
+            let parent = Path.dirname(dir)
+            if parent == dir then None
+            else climbForPin(parent, toolName)
+        }
+    }
+}
+
+fn collectArgs(i: Int, n: Int, acc: List<Text>): List<Text> =
+    if i >= n then acc
+    else collectArgs(i + 1, n, List.push(acc, arg(i) ?? ""))
+
+fn main(): Unit [io] = {
+    // Path.stem strips only the extension, not the directory (a separate
+    // stdlib bug, reported alongside the `??` one) — go through basename first.
+    let exeName = Path.stem(Path.basename(unwrapOrFatal(arg(0), "no argv[0]")))
+    let localAppData = unwrapOrFatal(getEnv("LOCALAPPDATA"), "LOCALAPPDATA is not set")
+    let ionHome = match getEnv("ION_HOME") {
+        Some(v) => v
+        None => Path.join(localAppData, "Ion")
+    }
+
+    let descriptorPath = Path.join(Path.join(ionHome, "shims"), exeName ++ ".toml")
+    let content = unwrapOrFatal(
+        readFile(descriptorPath),
+        "no shim descriptor for '" ++ exeName ++ "' (expected " ++ descriptorPath ++ ")"
+    )
+
+    var package = ""
+    var command = ""
+    var version = ""
+
+    for line in Text.split(content, "\n") {
+        let trimmed = Text.trim(line)
+        if Text.len(trimmed) == 0 or Text.startsWith(trimmed, "#") then {}
+        else {
+            match Text.indexOf(trimmed, "=") {
+                Some(eq) => {
+                    let key = Text.trim(Text.slice(trimmed, 0, eq))
+                    let value = stripQuotes(Text.trim(Text.slice(trimmed, eq + 1, Text.len(trimmed))))
+                    match key {
+                        "package" => { package = value }
+                        "command" => { command = value }
+                        "version" => { version = value }
+                        _ => {}
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
+    if Text.len(package) == 0 or Text.len(command) == 0 or Text.len(version) == 0 then
+        fatal("malformed shim descriptor " ++ descriptorPath ++ " (need package, command, version)")
+    else {}
+
+    // A project's own `ion.toml` (walked up from cwd) can pin a different
+    // version than the global `ion use`; package/command still come from
+    // the global shim descriptor, since ion.toml only pins a version.
+    let pinnedVersion = climbForPin(getCurrentDir(), exeName)
+    let effectiveVersion = match pinnedVersion {
+        Some(v) => v
+        None => version
+    }
+
+    let target = Path.join(Path.join(Path.join(Path.join(ionHome, "packages"), package), effectiveVersion), command)
+
+    if !fileExists(target) then
+        fatal(package ++ "@" ++ effectiveVersion ++ " is not installed (looked for " ++ target ++ ")")
+    else {}
+
+    let forwardedArgs = collectArgs(1, argCount(), List.empty())
+
+    flush()
+    let code = Process.execInherit(target, forwardedArgs)
+    Process.quit(code)
+}

@@ -1,0 +1,4 @@
+# Written by `ion use certo@1.8.0` — the shim reads this on every invocation.
+package = "certo"
+command = "certo.exe"
+version = "1.8.0"
