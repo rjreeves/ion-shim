@@ -1,0 +1,10 @@
+# Certo build output
+*.exe
+*.lib
+*.obj
+*.pdb
+*.dll
+*.so
+*.c
+dist/
+out/
