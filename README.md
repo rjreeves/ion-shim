@@ -5,6 +5,10 @@ trick: one tiny executable, copied under many names, that resolves the
 active version of whatever it was invoked as and re-execs it — with real
 stdin/stdout/stderr passthrough and exact exit-code propagation.
 
+This README covers the design; for step-by-step setup see
+[docs/USAGE.md](docs/USAGE.md), and for a line-by-line explanation of
+`src/ion_shim.cto` see [docs/CODE-WALKTHROUGH.md](docs/CODE-WALKTHROUGH.md).
+
 ## Layout it expects
 
 ```
