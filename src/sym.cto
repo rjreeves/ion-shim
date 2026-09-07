@@ -1,4 +1,4 @@
-module ion
+module sym
 
 import Stdlib.Core
 import Stdlib.Text
@@ -12,7 +12,7 @@ import Stdlib.Http
 import Stdlib.Crypto
 
 fn fatal(msg: Text): Unit [io] = {
-    eprintln("ion: " ++ msg)
+    eprintln("sym: " ++ msg)
     flush()
     Process.quit(1)
 }
@@ -24,17 +24,17 @@ fn fatalText(msg: Text): Text [io] = {
 
 fn usageAndExit(): Unit [io] = {
     eprintln("usage:")
-    eprintln("  ion install <package>@<version> <source-file> [<command-filename>]")
-    eprintln("  ion shim add <name> <package>@<version> [<command-filename>]")
-    eprintln("  ion shim remove <name>")
-    eprintln("  ion shim list")
-    eprintln("  ion use <package>@<version>")
-    eprintln("  ion pin <tool>@<version> [<dir>]")
+    eprintln("  sym install <package>@<version> <source-file> [<command-filename>]")
+    eprintln("  sym shim add <name> <package>@<version> [<command-filename>]")
+    eprintln("  sym shim remove <name>")
+    eprintln("  sym shim list")
+    eprintln("  sym use <package>@<version>")
+    eprintln("  sym pin <tool>@<version> [<dir>]")
     flush()
     Process.quit(1)
 }
 
-// Same `??`-avoidance rule as ion_shim.cto: `match` for any fallback with
+// Same `??`-avoidance rule as sym_shim.cto: `match` for any fallback with
 // an [io] effect, since `??` evaluates its right-hand side unconditionally.
 fn unwrapOrFatal(opt: Text?, msg: Text): Text [io] =
     match opt {
@@ -97,13 +97,13 @@ fn requirePkgVer(s: Text): PkgVer [io] =
         }
     }
 
-fn ionHome(): Text [io] =
-    match getEnv("ION_HOME") {
+fn symHome(): Text [io] =
+    match getEnv("SYM_HOME") {
         Some(v) => v
         None => match getEnv("LOCALAPPDATA") {
-            Some(v) => Path.join(v, "Ion")
+            Some(v) => Path.join(v, "Sym")
             None => {
-                fatal("neither ION_HOME nor LOCALAPPDATA is set")
+                fatal("neither SYM_HOME nor LOCALAPPDATA is set")
                 ""
             }
         }
@@ -244,7 +244,7 @@ fn buildFetchUrl(cfg: SourceConfig, sourcePath: Text, version: Text): Text [io] 
 
 // Verifies against a pinned per-version hash if one exists
 // (sources\<package>\checksums.toml, a flat "<version> = <sha256-hex>"
-// file -- reuses findKeyIn exactly as ion.toml does), and warns rather
+// file -- reuses findKeyIn exactly as sym.toml does), and warns rather
 // than silently skipping verification when there isn't one.
 fn verifyChecksum(sourcesDir: Text, pv: PkgVer, downloaded: Bytes): Unit [io] = {
     let checksumsPath = Path.join(Path.join(sourcesDir, pv.package), "checksums.toml")
@@ -275,7 +275,7 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
     let sourceContent = unwrapOrFatal(
         readFile(sourcePath),
         "no source config for '" ++ pv.package ++ "' (expected " ++ sourcePath ++
-        ") -- can't fetch without one; pass a local file instead: ion install " ++
+        ") -- can't fetch without one; pass a local file instead: sym install " ++
         pv.package ++ "@" ++ pv.version ++ " <source-file>"
     )
     let cfg = parseSourceConfig(sourceContent)
@@ -369,7 +369,7 @@ fn cmdShimAdd(home: Text): Unit [io] = {
     let madeBin = makeDir(binDir)
     if !madeBin then fatal("could not create " ++ binDir) else {}
 
-    let masterShim = Path.join(Path.join(home, "shim"), "ion_shim.exe")
+    let masterShim = Path.join(Path.join(home, "shim"), "sym_shim.exe")
     let binPath = Path.join(binDir, name ++ ".exe")
     let copied = copyBytes(masterShim, binPath)
     if !copied then fatal("could not copy shim from '" ++ masterShim ++ "' -- is it built and in place?") else {}
@@ -430,7 +430,7 @@ fn cmdPin(): Unit [io] = {
         Some(d) => d
         None => getCurrentDir()
     }
-    let path = Path.join(dir, "ion.toml")
+    let path = Path.join(dir, "sym.toml")
     let existing = match readFile(path) {
         Some(c) => c
         None => ""
@@ -447,17 +447,17 @@ fn main(): Unit [io] = {
 
     match cmd {
         "install" => {
-            let home = ionHome()
+            let home = symHome()
             cmdInstall(home)
         }
         "use" => {
-            let home = ionHome()
+            let home = symHome()
             cmdUse(home)
         }
         "pin" => cmdPin()
         "shim" => {
             if argCount() < 3 then usageAndExit() else {}
-            let home = ionHome()
+            let home = symHome()
             let sub = unwrapOrFatal(arg(2), "internal error: missing shim subcommand")
             match sub {
                 "add" => cmdShimAdd(home)

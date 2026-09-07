@@ -1,11 +1,11 @@
-# ion-shim
+# sym-shim
 
-A single generic shim binary, in Certo, for Ion's version-manager `PATH`
+A single generic shim binary, in Certo, for a version-manager `PATH`
 trick: one tiny executable, copied under many names, that resolves the
 active version of whatever it was invoked as and re-execs it — with real
 stdin/stdout/stderr passthrough and exact exit-code propagation.
 
-`src/ion.cto` builds a small `ion` CLI implementing the management side
+`src/sym.cto` builds a small `sym` CLI implementing the management side
 — `install`/`use`/`shim add`/`shim remove`/`shim list`/`pin` — that
 writes and reads exactly the files described below. `install` can take
 an already-obtained local file, or fetch a real GitHub release itself
@@ -14,19 +14,19 @@ an already-obtained local file, or fetch a real GitHub release itself
 
 This README covers the design; for step-by-step setup see
 [docs/USAGE.md](docs/USAGE.md), and for a line-by-line explanation of
-`src/ion_shim.cto` see [docs/CODE-WALKTHROUGH.md](docs/CODE-WALKTHROUGH.md).
+`src/sym_shim.cto` see [docs/CODE-WALKTHROUGH.md](docs/CODE-WALKTHROUGH.md).
 
 ## Layout it expects
 
 ```
-%LOCALAPPDATA%\Ion\
+%LOCALAPPDATA%\Sym\
     shim\
-        ion_shim.exe     ← the master build artifact — never on PATH itself,
+        sym_shim.exe     ← the master build artifact — never on PATH itself,
                              never invoked directly; every entry in bin\ below
                              is a copy of this one file, renamed
     bin\
-        certo.exe        ← copy of shim\ion_shim.exe, named "certo"
-        flux.exe         ← copy of shim\ion_shim.exe, named "flux"
+        certo.exe        ← copy of shim\sym_shim.exe, named "certo"
+        flux.exe         ← copy of shim\sym_shim.exe, named "flux"
     shims\
         certo.toml       ← which version "certo" currently resolves to
         flux.toml
@@ -36,14 +36,14 @@ This README covers the design; for step-by-step setup see
             1.8.0\certo.exe
 ```
 
-Only `%LOCALAPPDATA%\Ion\bin` needs to be on `PATH`. `shim\ion_shim.exe`
+Only `%LOCALAPPDATA%\Sym\bin` needs to be on `PATH`. `shim\sym_shim.exe`
 deliberately lives outside it — it's the one-time build output that
 every per-tool copy is stamped from, not something meant to run under
 its own name. Keeping it here (rather than wherever it happened to be
 built) means adding a new tool never requires recompiling from Certo
-source: `ion shim add <name> <package>@<version>` just copies
-`shim\ion_shim.exe` to `bin\<name>.exe` and writes the descriptor — no
-`PATH` change, ever. Switching versions (`ion use certo@1.7`) is a
+source: `sym shim add <name> <package>@<version>` just copies
+`shim\sym_shim.exe` to `bin\<name>.exe` and writes the descriptor — no
+`PATH` change, ever. Switching versions (`sym use certo@1.7`) is a
 single-line edit to `shims\certo.toml`; the shim binary itself never
 changes.
 
@@ -58,7 +58,7 @@ command = "certo.exe"
 version = "1.8.0"
 ```
 
-`ION_HOME` overrides `%LOCALAPPDATA%\Ion` (mainly for testing).
+`SYM_HOME` overrides `%LOCALAPPDATA%\Sym` (mainly for testing).
 
 ## Toolchains (a release with more than one binary)
 
@@ -100,12 +100,12 @@ bundle rather than versioning `rustc` and `cargo` separately.
 That leaves exactly one real problem, and it belongs to whatever
 installs packages, not the shim:
 
-- **Coherent switching.** `ion use certo@1.9.0` needs to move every
+- **Coherent switching.** `sym use certo@1.9.0` needs to move every
   descriptor with `package = "certo"` to `1.9.0` together, so `certo`
   and `certo-fmt` never end up on different versions. This needs no
   extra bookkeeping beyond what already exists — since every descriptor
   already records its own `package`, switching just means scanning
-  `shims\*.toml` for matches and rewriting all of them. `src/ion.cto`'s
+  `shims\*.toml` for matches and rewriting all of them. `src/sym.cto`'s
   `use` command does exactly this today.
 - **First install still needs a manifest.** Before any descriptors
   exist, something has to know that `certo@1.8.0` exposes `certo`,
@@ -116,7 +116,7 @@ installs packages, not the shim:
 
 ## Version aliases (`latest`, `lts`, ...)
 
-Both `version` in a shim descriptor and a pin in `ion.toml` can be a
+Both `version` in a shim descriptor and a pin in `sym.toml` can be a
 named alias instead of an exact version, with **no shim code involved
 at all** — a version string is just an opaque path segment to the
 shim, so `version = "latest"` only works because `packages\certo\latest`
@@ -130,7 +130,7 @@ packages\certo\
 ```
 
 Once that junction exists, `version = "latest"` in `shims\certo.toml`
-and `certo = "latest"` in `ion.toml` both resolve correctly — verified
+and `certo = "latest"` in `sym.toml` both resolve correctly — verified
 against a real junction, both from the global descriptor and from a
 project pin. `lts` works identically; it's just another junction name.
 
@@ -147,15 +147,15 @@ version and never updated) is entirely up to how the installer manages
 it — the shim can't tell the difference and doesn't need to.
 
 One caveat worth calling out even though nothing here enforces it: a
-*live* floating alias inside a checked-in `ion.toml` undermines the
+*live* floating alias inside a checked-in `sym.toml` undermines the
 reproducibility pinning exists for in the first place — two people
 building the same project at different times could silently get
 different versions. Fine for a global default; worth avoiding in a
 project pin meant to be reproducible.
 
-## Fetching a package (`ion install <package>@<version>`, no local file)
+## Fetching a package (`sym install <package>@<version>`, no local file)
 
-`ion install` takes an already-downloaded file if you give it one; if
+`sym install` takes an already-downloaded file if you give it one; if
 you don't, it fetches instead, using a per-package config that says how:
 
 ```toml
@@ -218,7 +218,7 @@ converting through `Text` in between.
 
 A checksum is per-*version*, but a source config is per-*package* —
 one file, many versions — so the expected hash lives in a sibling file,
-keyed by version, reusing the exact same flat-file lookup `ion.toml`
+keyed by version, reusing the exact same flat-file lookup `sym.toml`
 already uses:
 
 ```toml
@@ -243,25 +243,25 @@ explicitly recorded. A mismatch is fatal and installs nothing: verified
 by fetching a real release with a deliberately wrong pinned hash and
 confirming no file was written.
 
-Extraction leaves its temporary files under `Ion\tmp\` rather than
+Extraction leaves its temporary files under `Sym\tmp\` rather than
 cleaning them up — there's no recursive-directory-delete primitive in
 Certo's stdlib, and adding one felt like scope creep for a first cut of
 fetching. A known simplification, not a correctness issue.
 
-## Project-level pinning (`ion.toml`)
+## Project-level pinning (`sym.toml`)
 
-A project can pin different versions than the global `ion use` by
-putting a single `ion.toml` in its root — one file per project, listing
+A project can pin different versions than the global `sym use` by
+putting a single `sym.toml` in its root — one file per project, listing
 every tool that project cares about:
 
 ```toml
-# project-a/ion.toml
+# project-a/sym.toml
 certo = "1.7.0"
 flux  = "1.2.0"
 ```
 
 ```toml
-# project-b/ion.toml
+# project-b/sym.toml
 certo = "1.8.0"
 ```
 
@@ -277,38 +277,38 @@ Only exact versions are supported (`certo = "1.7.0"`, not `^1.7` or
 solver, so there's no range/constraint syntax.
 
 The shim walks up from the current directory looking for the nearest
-`ion.toml`. The first one found is the project boundary:
+`sym.toml`. The first one found is the project boundary:
 
 - if it has a line for the invoked tool name, that version wins;
 - if it exists but doesn't mention that tool, the shim stops climbing
   there anyway (that's still the project root) and falls back to the
-  global `ion use` version — it will not skip past it to check a
-  grandparent directory's `ion.toml`;
+  global `sym use` version — it will not skip past it to check a
+  grandparent directory's `sym.toml`;
 - if none is found before the filesystem root, the global version applies.
 
 Only the version is pinned this way — `package` and `command` still come
 from the global shim descriptor (`shims\<name>.toml`), since that's what
-Ion wrote when the tool was first shimmed.
+`sym shim add` wrote when the tool was first shimmed.
 
 ### Nested projects (monorepos)
 
-A nested package with its own `ion.toml` overrides an ancestor's pin for
+A nested package with its own `sym.toml` overrides an ancestor's pin for
 the same tool, since it's simply the nearer file found while climbing:
 
 ```toml
-# monorepo/ion.toml
+# monorepo/sym.toml
 certo = "1.8.0"
 ```
 
 ```toml
-# monorepo/packages/backend/ion.toml
+# monorepo/packages/backend/sym.toml
 certo = "1.7.0"
 ```
 
 Invoking `certo` from `monorepo/packages/backend` resolves to `1.7.0`;
 from `monorepo` itself (or any other sibling package without its own
 pin), it resolves to `1.8.0`. This is "nearest file wins," not
-"innermost value across all files wins": each `ion.toml` is a complete,
+"innermost value across all files wins": each `sym.toml` is a complete,
 self-contained boundary. A nested file that pins `flux` but says
 nothing about `certo` does **not** cause the climb to continue past it
 to the root's `certo` pin — that case falls straight to the global
@@ -324,15 +324,15 @@ a project can narrow the global default, never redefine what a tool
 name means. Concretely:
 
 - The global descriptor (`shims\<name>.toml`) is mandatory and defines
-  identity (`package`, `command`). `ion.toml` can never substitute for
+  identity (`package`, `command`). `sym.toml` can never substitute for
   it or change what a name resolves to.
-- If the global descriptor exists, `ion.toml`'s pinned version (if any)
+- If the global descriptor exists, `sym.toml`'s pinned version (if any)
   wins over the descriptor's `version`; otherwise the descriptor's
   version applies.
-- If the global descriptor is **missing** but `ion.toml` pins that tool
+- If the global descriptor is **missing** but `sym.toml` pins that tool
   anyway, the shim doesn't silently ignore the pin — it fails with a
   specific message naming the orphaned pin (`'flux' is pinned to 1.2.0
-  in ion.toml, but has never been shimmed globally ... run 'ion shim
+  in sym.toml, but has never been shimmed globally ... run 'sym shim
   add flux <package>@1.2.0' first`) rather than the generic "no shim
   descriptor" error, since that would give no hint the pin exists at all.
 - Whichever version wins, "is it actually installed" is checked the
@@ -341,10 +341,10 @@ name means. Concretely:
 ## Build
 
 ```
-certo src/ion_shim.cto -o ion_shim.exe
+certo src/sym_shim.cto -o sym_shim.exe
 ```
 
-Copy (or hardlink) `ion_shim.exe` to `%LOCALAPPDATA%\Ion\bin\<name>.exe`
+Copy (or hardlink) `sym_shim.exe` to `%LOCALAPPDATA%\Sym\bin\<name>.exe`
 for each tool it should front. At runtime it reads its own `argv[0]`
 to figure out which name it was invoked as.
 
@@ -371,7 +371,7 @@ compiler, fixed or worked around here:
    unconditionally regardless of `a`. Confirmed with a minimal repro (an
    `[io]` side effect on the right-hand side runs even when the left is
    `Some(...)`). This breaks the common "unwrap-or-fail" idiom. Routed
-   around it in `ion_shim.cto` via `match` (which *does* short-circuit
+   around it in `sym_shim.cto` via `match` (which *does* short-circuit
    correctly) instead of fixing the compiler, per instruction — worth
    fixing in `certo-codegen` separately since it likely affects other code
    relying on `??`.
@@ -381,7 +381,7 @@ compiler, fixed or worked around here:
    Worked around with `Path.stem(Path.basename(path))`; not fixed upstream.
 
 4. **No way to get the current working directory.** Needed for project-level
-   pinning (walking up from cwd looking for `ion.toml`) — there was no
+   pinning (walking up from cwd looking for `sym.toml`) — there was no
    `cwd()`-equivalent in the stdlib at all. Added `getCurrentDir(): Text`
    to the compiler (`crates/stdlib/src/env.rs`, plus `seed.rs`
    registration) — `GetCurrentDirectoryA` on Windows, `getcwd` on POSIX.
@@ -404,6 +404,6 @@ compiler, fixed or worked around here:
    `Bytes` value. Verified against a real 2 MB GitHub release asset
    (fetched through its actual redirect to a CDN): SHA-256 hash and
    byte size both matched an independent `Invoke-WebRequest` fetch
-   exactly. This was necessary groundwork for `ion install`'s fetch
+   exactly. This was necessary groundwork for `sym install`'s fetch
    path (see "Fetching a package" above), which needs to download and
    hash real binaries without corrupting them.

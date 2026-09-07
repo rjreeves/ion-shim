@@ -1,4 +1,4 @@
-module ion_shim
+module sym_shim
 
 import Stdlib.Core
 import Stdlib.Text
@@ -9,7 +9,7 @@ import Stdlib.Process
 import Stdlib.Collections
 
 fn fatal(msg: Text): Unit [io] = {
-    eprintln("ion-shim: " ++ msg)
+    eprintln("sym-shim: " ++ msg)
     flush()
     Process.quit(127)
 }
@@ -35,7 +35,7 @@ fn stripQuotes(s: Text): Text =
 type KeyValue = { key: Text, value: Text }
 
 // Same flat `key = "value"` subset used for shim descriptors, reused here
-// for project pin files (`ion.toml`).
+// for project pin files (`sym.toml`).
 fn parseKVLine(line: Text): KeyValue? = {
     let trimmed = Text.trim(line)
     if Text.len(trimmed) == 0 or Text.startsWith(trimmed, "#") then None
@@ -61,12 +61,12 @@ fn findKeyIn(content: Text, wantedKey: Text): Text? = {
     result
 }
 
-// Walks up from `dir` looking for the nearest `ion.toml`. The first one
+// Walks up from `dir` looking for the nearest `sym.toml`. The first one
 // found is the project root: if it pins `toolName`, that wins; if it
 // exists but doesn't mention `toolName`, we stop there anyway (it's still
-// the project boundary) and fall back to the global `ion use` version.
+// the project boundary) and fall back to the global `sym use` version.
 fn climbForPin(dir: Text, toolName: Text): Text? = {
-    let candidate = Path.join(dir, "ion.toml")
+    let candidate = Path.join(dir, "sym.toml")
     match readFile(candidate) {
         Some(content) => findKeyIn(content, toolName)
         None => {
@@ -86,24 +86,24 @@ fn main(): Unit [io] = {
     // stdlib bug, reported alongside the `??` one) — go through basename first.
     let exeName = Path.stem(Path.basename(unwrapOrFatal(arg(0), "no argv[0]")))
     let localAppData = unwrapOrFatal(getEnv("LOCALAPPDATA"), "LOCALAPPDATA is not set")
-    let ionHome = match getEnv("ION_HOME") {
+    let symHome = match getEnv("SYM_HOME") {
         Some(v) => v
-        None => Path.join(localAppData, "Ion")
+        None => Path.join(localAppData, "Sym")
     }
 
     // Checked before requiring the global descriptor to exist, so an
-    // ion.toml pin on a tool that was never `ion shim add`-ed gets a
+    // sym.toml pin on a tool that was never `sym shim add`-ed gets a
     // specific, actionable error instead of the generic "no descriptor" one.
     let pinnedVersion = climbForPin(getCurrentDir(), exeName)
 
-    let descriptorPath = Path.join(Path.join(ionHome, "shims"), exeName ++ ".toml")
+    let descriptorPath = Path.join(Path.join(symHome, "shims"), exeName ++ ".toml")
     let content = match readFile(descriptorPath) {
         Some(c) => c
         None => match pinnedVersion {
             Some(v) => {
                 fatal(
-                    "'" ++ exeName ++ "' is pinned to " ++ v ++ " in ion.toml, but has never " ++
-                    "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'ion shim add " ++
+                    "'" ++ exeName ++ "' is pinned to " ++ v ++ " in sym.toml, but has never " ++
+                    "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'sym shim add " ++
                     exeName ++ " <package>@" ++ v ++ "' first"
                 )
                 ""
@@ -143,15 +143,15 @@ fn main(): Unit [io] = {
         fatal("malformed shim descriptor " ++ descriptorPath ++ " (need package, command, version)")
     else {}
 
-    // A project's own `ion.toml` (walked up from cwd) can pin a different
-    // version than the global `ion use`; package/command still come from
-    // the global shim descriptor, since ion.toml only pins a version.
+    // A project's own `sym.toml` (walked up from cwd) can pin a different
+    // version than the global `sym use`; package/command still come from
+    // the global shim descriptor, since sym.toml only pins a version.
     let effectiveVersion = match pinnedVersion {
         Some(v) => v
         None => version
     }
 
-    let target = Path.join(Path.join(Path.join(Path.join(ionHome, "packages"), package), effectiveVersion), command)
+    let target = Path.join(Path.join(Path.join(Path.join(symHome, "packages"), package), effectiveVersion), command)
 
     if !fileExists(target) then
         fatal(package ++ "@" ++ effectiveVersion ++ " is not installed (looked for " ++ target ++ ")")

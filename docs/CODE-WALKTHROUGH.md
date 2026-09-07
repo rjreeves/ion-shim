@@ -1,4 +1,4 @@
-# Code walkthrough: `src/ion_shim.cto`
+# Code walkthrough: `src/sym_shim.cto`
 
 A line-by-line explanation of how the shim works, why it's written the
 way it is, and the compiler quirks that shaped it. Cross-references use
@@ -9,7 +9,7 @@ will drift but the structure won't.
 
 Read your own invoked name from `argv[0]`, find the descriptor that
 says which real binary that name currently means, optionally let a
-project's `ion.toml` override just the version, then replace yourself
+project's `sym.toml` override just the version, then replace yourself
 with that real binary — stdin, stdout, stderr, and exit code all
 passed through untouched.
 
@@ -36,7 +36,7 @@ manipulation the TOML-subset parser needs, `File` for `readFile`/
 
 ```certo
 fn fatal(msg: Text): Unit [io] = {
-    eprintln("ion-shim: " ++ msg)
+    eprintln("sym-shim: " ++ msg)
     flush()
     Process.quit(127)
 }
@@ -139,7 +139,7 @@ fn parseKVLine(line: Text): KeyValue? = {
 
 Certo's stdlib has no TOML parser, so this file implements the
 smallest subset that both `shims\<name>.toml` descriptors and
-`ion.toml` pin files actually need: flat `key = value` lines, `#`
+`sym.toml` pin files actually need: flat `key = value` lines, `#`
 full-line comments, and blank lines — no sections, no arrays, no
 nesting. A line is parsed by finding its **first** `=` character (via
 `Text.indexOf`, which returns the byte offset as an `Int?`) and
@@ -173,7 +173,7 @@ fn findKeyIn(content: Text, wantedKey: Text): Text? = {
 
 Given a whole file's contents, split it into lines and scan every one
 looking for a key match, keeping the last match found in a mutable
-`var`. This is what lets one `ion.toml` file list any number of tools
+`var`. This is what lets one `sym.toml` file list any number of tools
 (`certo = "1.7.0"` / `flux = "1.2.0"` / ...) — each shim invocation
 calls this with its own name as `wantedKey` and simply ignores every
 line that isn't relevant to it. There's no early exit on finding a
@@ -184,7 +184,7 @@ since descriptor/pin files are a handful of lines at most.
 
 ```certo
 fn climbForPin(dir: Text, toolName: Text): Text? = {
-    let candidate = Path.join(dir, "ion.toml")
+    let candidate = Path.join(dir, "sym.toml")
     match readFile(candidate) {
         Some(content) => findKeyIn(content, toolName)
         None => {
@@ -198,11 +198,11 @@ fn climbForPin(dir: Text, toolName: Text): Text? = {
 
 Recursive directory walk, one call per level. At each `dir`:
 
-1. Try to read `dir\ion.toml`.
+1. Try to read `dir\sym.toml`.
 2. **If it exists**, the search stops here — return whatever
    `findKeyIn` finds for `toolName` in *this* file, `Some` or `None`,
    without ever looking at any ancestor directory. This is the
-   "project boundary" rule: the nearest `ion.toml` is authoritative for
+   "project boundary" rule: the nearest `sym.toml` is authoritative for
    whatever it lists, even if that means returning `None` for a tool
    it doesn't mention while a grandparent's file would have matched.
    This deliberately mirrors `asdf`'s `.tool-versions` behavior rather
@@ -249,12 +249,12 @@ let exeName = Path.stem(Path.basename(unwrapOrFatal(arg(0), "no argv[0]")))
 ```
 
 `arg(0)` gives the full invocation path (e.g.
-`C:\Users\...\Ion\bin\certo.exe`). `Path.basename` strips the
+`C:\Users\...\Sym\bin\certo.exe`). `Path.basename` strips the
 directory, leaving `certo.exe`; `Path.stem` is supposed to additionally
 strip the extension, leaving `certo` — but a second real compiler bug
 was found here: `Path.stem` applied directly to a full path only
 strips the extension, **not** the directory, returning
-`C:\Users\...\Ion\bin\certo` instead of `certo`. The workaround is
+`C:\Users\...\Sym\bin\certo` instead of `certo`. The workaround is
 exactly what's shown: call `Path.basename` first to remove the
 directory, then `Path.stem` on the result, which only ever has to
 strip an extension from a bare filename — the one thing it does
@@ -264,16 +264,16 @@ correctly.
 
 ```certo
 let localAppData = unwrapOrFatal(getEnv("LOCALAPPDATA"), "LOCALAPPDATA is not set")
-let ionHome = match getEnv("ION_HOME") {
+let symHome = match getEnv("SYM_HOME") {
     Some(v) => v
-    None => Path.join(localAppData, "Ion")
+    None => Path.join(localAppData, "Sym")
 }
 ```
 
-`ION_HOME` is an explicit override, checked first — mainly so tests
+`SYM_HOME` is an explicit override, checked first — mainly so tests
 (and this repo's own verification work) can point the shim at a
 scratch directory without touching the real `%LOCALAPPDATA%`. If it's
-unset, the default is `%LOCALAPPDATA%\Ion`. Note `localAppData` is
+unset, the default is `%LOCALAPPDATA%\Sym`. Note `localAppData` is
 computed unconditionally even though it's only used in the `None`
 branch — a minor inefficiency (an environment lookup that might go
 unused) traded for simplicity, since environment lookups are cheap and
@@ -284,14 +284,14 @@ this runs once per invocation.
 ```certo
 let pinnedVersion = climbForPin(getCurrentDir(), exeName)
 
-let descriptorPath = Path.join(Path.join(ionHome, "shims"), exeName ++ ".toml")
+let descriptorPath = Path.join(Path.join(symHome, "shims"), exeName ++ ".toml")
 let content = match readFile(descriptorPath) {
     Some(c) => c
     None => match pinnedVersion {
         Some(v) => {
             fatal(
-                "'" ++ exeName ++ "' is pinned to " ++ v ++ " in ion.toml, but has never " ++
-                "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'ion shim add " ++
+                "'" ++ exeName ++ "' is pinned to " ++ v ++ " in sym.toml, but has never " ++
+                "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'sym shim add " ++
                 exeName ++ " <package>@" ++ v ++ "' first"
             )
             ""
@@ -312,7 +312,7 @@ two genuinely different situations:
 - **No pin and no descriptor**: the tool was simply never shimmed.
   Generic message.
 - **A pin exists, but no descriptor**: someone wrote `certo = "1.7.0"`
-  in an `ion.toml` for a tool that was never `ion shim add`-ed
+  in an `sym.toml` for a tool that was never `sym shim add`-ed
   globally. Without checking the pin first, this would produce the
   same generic "no shim descriptor" message, giving no hint that a pin
   exists at all — a genuinely confusing failure mode to debug blind.
@@ -355,7 +355,7 @@ for line in Text.split(content, "\n") {
 
 This duplicates the parsing logic in `parseKVLine`/`findKeyIn` rather
 than reusing them, because the three fields here have fixed, known
-names (unlike an `ion.toml`'s arbitrary tool names) and are collected
+names (unlike an `sym.toml`'s arbitrary tool names) and are collected
 into three separate mutable variables rather than looked up by a
 single key. It was left as its own loop rather than refactored to
 share code with `findKeyIn`, since both are small, independently
@@ -387,21 +387,21 @@ The one place the project pin actually overrides anything: if
 `climbForPin` found a value, use it; otherwise fall back to the
 version parsed from the global descriptor. `package` and `command` are
 never subject to this override — they always come from the global
-descriptor, by construction, since `ion.toml` lines are only ever
+descriptor, by construction, since `sym.toml` lines are only ever
 `toolname = version`, with no way to express a package or command
 override at all.
 
 ### Step 6: does it actually exist? (lines 154–158)
 
 ```certo
-let target = Path.join(Path.join(Path.join(Path.join(ionHome, "packages"), package), effectiveVersion), command)
+let target = Path.join(Path.join(Path.join(Path.join(symHome, "packages"), package), effectiveVersion), command)
 
 if !fileExists(target) then
     fatal(package ++ "@" ++ effectiveVersion ++ " is not installed (looked for " ++ target ++ ")")
 else {}
 ```
 
-Four nested `Path.join` calls build `ionHome\packages\<package>\<effectiveVersion>\<command>`
+Four nested `Path.join` calls build `symHome\packages\<package>\<effectiveVersion>\<command>`
 one segment at a time — there's no variadic `Path.join` taking more
 than two arguments in the stdlib. `effectiveVersion` is treated as an
 opaque string the whole way through: nothing here distinguishes a real
