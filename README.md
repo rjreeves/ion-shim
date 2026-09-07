@@ -40,6 +40,45 @@ version = "1.8.0"
 
 `ION_HOME` overrides `%LOCALAPPDATA%\Ion` (mainly for testing).
 
+## Version aliases (`latest`, `lts`, ...)
+
+Both `version` in a shim descriptor and a pin in `ion.toml` can be a
+named alias instead of an exact version, with **no shim code involved
+at all** — a version string is just an opaque path segment to the
+shim, so `version = "latest"` only works because `packages\certo\latest`
+is a real directory. Concretely, that means a directory junction:
+
+```
+packages\certo\
+    1.9.0\certo.exe
+    latest\          ← junction (`New-Item -ItemType Junction`, no admin
+                        rights needed, unlike a symlink) pointing at 1.9.0
+```
+
+Once that junction exists, `version = "latest"` in `shims\certo.toml`
+and `certo = "latest"` in `ion.toml` both resolve correctly — verified
+against a real junction, both from the global descriptor and from a
+project pin. `lts` works identically; it's just another junction name.
+
+This is deliberately pushed entirely onto whatever installs packages,
+not the shim, for the same reason `package`/`command` identity lives in
+the global descriptor rather than being inferred: the shim only
+resolves, it never decides. It also sidesteps a real problem the shim
+has no way to solve on its own — there's no way to tell, from a
+directory name alone, which installed version was ever considered an
+"LTS" release; only the installer has that knowledge. Whether the alias
+is *live* (the junction gets re-pointed as new versions are installed,
+so it silently tracks forward) or *frozen* (resolved once to a concrete
+version and never updated) is entirely up to how the installer manages
+it — the shim can't tell the difference and doesn't need to.
+
+One caveat worth calling out even though nothing here enforces it: a
+*live* floating alias inside a checked-in `ion.toml` undermines the
+reproducibility pinning exists for in the first place — two people
+building the same project at different times could silently get
+different versions. Fine for a global default; worth avoiding in a
+project pin meant to be reproducible.
+
 ## Project-level pinning (`ion.toml`)
 
 A project can pin different versions than the global `ion use` by
