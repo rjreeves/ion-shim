@@ -82,6 +82,27 @@ Only the version is pinned this way — `package` and `command` still come
 from the global shim descriptor (`shims\<name>.toml`), since that's what
 Ion wrote when the tool was first shimmed.
 
+### When a pin and the global descriptor conflict
+
+There's only one axis of override — version — and only one direction:
+a project can narrow the global default, never redefine what a tool
+name means. Concretely:
+
+- The global descriptor (`shims\<name>.toml`) is mandatory and defines
+  identity (`package`, `command`). `ion.toml` can never substitute for
+  it or change what a name resolves to.
+- If the global descriptor exists, `ion.toml`'s pinned version (if any)
+  wins over the descriptor's `version`; otherwise the descriptor's
+  version applies.
+- If the global descriptor is **missing** but `ion.toml` pins that tool
+  anyway, the shim doesn't silently ignore the pin — it fails with a
+  specific message naming the orphaned pin (`'flux' is pinned to 1.2.0
+  in ion.toml, but has never been shimmed globally ... run 'ion shim
+  add flux <package>@1.2.0' first`) rather than the generic "no shim
+  descriptor" error, since that would give no hint the pin exists at all.
+- Whichever version wins, "is it actually installed" is checked the
+  same way regardless of where the version came from.
+
 ## Build
 
 ```

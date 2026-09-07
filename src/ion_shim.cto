@@ -91,11 +91,29 @@ fn main(): Unit [io] = {
         None => Path.join(localAppData, "Ion")
     }
 
+    // Checked before requiring the global descriptor to exist, so an
+    // ion.toml pin on a tool that was never `ion shim add`-ed gets a
+    // specific, actionable error instead of the generic "no descriptor" one.
+    let pinnedVersion = climbForPin(getCurrentDir(), exeName)
+
     let descriptorPath = Path.join(Path.join(ionHome, "shims"), exeName ++ ".toml")
-    let content = unwrapOrFatal(
-        readFile(descriptorPath),
-        "no shim descriptor for '" ++ exeName ++ "' (expected " ++ descriptorPath ++ ")"
-    )
+    let content = match readFile(descriptorPath) {
+        Some(c) => c
+        None => match pinnedVersion {
+            Some(v) => {
+                fatal(
+                    "'" ++ exeName ++ "' is pinned to " ++ v ++ " in ion.toml, but has never " ++
+                    "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'ion shim add " ++
+                    exeName ++ " <package>@" ++ v ++ "' first"
+                )
+                ""
+            }
+            None => {
+                fatal("no shim descriptor for '" ++ exeName ++ "' (expected " ++ descriptorPath ++ ")")
+                ""
+            }
+        }
+    }
 
     var package = ""
     var command = ""
@@ -128,7 +146,6 @@ fn main(): Unit [io] = {
     // A project's own `ion.toml` (walked up from cwd) can pin a different
     // version than the global `ion use`; package/command still come from
     // the global shim descriptor, since ion.toml only pins a version.
-    let pinnedVersion = climbForPin(getCurrentDir(), exeName)
     let effectiveVersion = match pinnedVersion {
         Some(v) => v
         None => version
