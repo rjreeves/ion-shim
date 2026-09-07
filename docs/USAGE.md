@@ -43,21 +43,34 @@ The shim expects this structure under `%LOCALAPPDATA%\Ion` (or wherever
 
 ```
 %LOCALAPPDATA%\Ion\
-    bin\        <- shim copies live here; this is the only PATH entry needed
+    shim\       <- the master ion_shim.exe build lives here, never on PATH
+    bin\        <- per-tool copies of shim\ion_shim.exe; the only PATH entry needed
     shims\      <- one <name>.toml descriptor per shimmed tool
     packages\   <- actual installed binaries, one folder per version
 ```
 
-Create the three folders once:
+Create the four folders once:
 
 ```powershell
+New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Ion\shim"
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Ion\bin"
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Ion\shims"
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Ion\packages"
 ```
 
+Copy the binary you just built into its permanent home:
+
+```powershell
+Copy-Item ion_shim.exe "$env:LOCALAPPDATA\Ion\shim\ion_shim.exe"
+```
+
+Keeping one master copy here — separate from `bin\`, and not wherever
+it happened to be built — means shimming a new tool later is always a
+copy from `shim\ion_shim.exe`, never a recompile from Certo source.
+
 Add `%LOCALAPPDATA%\Ion\bin` to your `PATH` — this is the **only** PATH
 change ever required, no matter how many tools you shim later.
+`shim\` is deliberately never added to `PATH`.
 
 ## 4. Install a real version of a tool
 
@@ -77,10 +90,10 @@ today, you place it yourself.)
 
 Two things, both one-time per tool name:
 
-**a. Copy the shim binary under the tool's name:**
+**a. Copy the master shim binary under the tool's name:**
 
 ```powershell
-Copy-Item ion_shim.exe "$env:LOCALAPPDATA\Ion\bin\certo.exe"
+Copy-Item "$env:LOCALAPPDATA\Ion\shim\ion_shim.exe" "$env:LOCALAPPDATA\Ion\bin\certo.exe"
 ```
 
 **b. Write its descriptor** at `shims\certo.toml`:

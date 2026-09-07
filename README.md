@@ -13,9 +13,13 @@ This README covers the design; for step-by-step setup see
 
 ```
 %LOCALAPPDATA%\Ion\
+    shim\
+        ion_shim.exe     ← the master build artifact — never on PATH itself,
+                             never invoked directly; every entry in bin\ below
+                             is a copy of this one file, renamed
     bin\
-        certo.exe        ← copy of ion_shim.exe, named "certo"
-        flux.exe         ← copy of ion_shim.exe, named "flux"
+        certo.exe        ← copy of shim\ion_shim.exe, named "certo"
+        flux.exe         ← copy of shim\ion_shim.exe, named "flux"
     shims\
         certo.toml       ← which version "certo" currently resolves to
         flux.toml
@@ -25,11 +29,16 @@ This README covers the design; for step-by-step setup see
             1.8.0\certo.exe
 ```
 
-Only `%LOCALAPPDATA%\Ion\bin` needs to be on `PATH`. Adding a new managed
-tool is `ion shim add <name> <package>@<version>` (writes a `.toml` +
-copies the shim binary under `<name>.exe`) — no `PATH` change, ever.
-Switching versions (`ion use certo@1.7`) is a single-line edit to
-`shims\certo.toml`; the shim binary itself never changes.
+Only `%LOCALAPPDATA%\Ion\bin` needs to be on `PATH`. `shim\ion_shim.exe`
+deliberately lives outside it — it's the one-time build output that
+every per-tool copy is stamped from, not something meant to run under
+its own name. Keeping it here (rather than wherever it happened to be
+built) means adding a new tool never requires recompiling from Certo
+source: `ion shim add <name> <package>@<version>` just copies
+`shim\ion_shim.exe` to `bin\<name>.exe` and writes the descriptor — no
+`PATH` change, ever. Switching versions (`ion use certo@1.7`) is a
+single-line edit to `shims\certo.toml`; the shim binary itself never
+changes.
 
 ## Descriptor format (`shims\<name>.toml`)
 
