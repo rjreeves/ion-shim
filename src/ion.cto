@@ -17,6 +17,11 @@ fn fatal(msg: Text): Unit [io] = {
     Process.quit(1)
 }
 
+fn fatalText(msg: Text): Text [io] = {
+    fatal(msg)
+    ""
+}
+
 fn usageAndExit(): Unit [io] = {
     eprintln("usage:")
     eprintln("  ion install <package>@<version> <source-file> [<command-filename>]")
@@ -183,13 +188,16 @@ fn listTomlFiles(dir: Text): List<Text> = {
 }
 
 // Reads sources\<package>.toml -- the per-package "how to fetch" config.
-type SourceConfig = { provider: Text, repo: Text, tag: Text, asset: Text, archive: Text, binaryPath: Text }
+// `repo`/`tag`/`asset` are only used by the "github-release" provider;
+// `url` only by the generic "url" provider -- see buildFetchUrl.
+type SourceConfig = { provider: Text, repo: Text, tag: Text, asset: Text, url: Text, archive: Text, binaryPath: Text }
 
 fn parseSourceConfig(content: Text): SourceConfig = {
     var provider = ""
     var repo = ""
     var tag = ""
     var asset = ""
+    var url = ""
     var archive = "none"
     var binaryPath = ""
     for line in Text.split(content, "\n") {
@@ -200,6 +208,7 @@ fn parseSourceConfig(content: Text): SourceConfig = {
                     "repo" => { repo = kv.value }
                     "tag" => { tag = kv.value }
                     "asset" => { asset = kv.value }
+                    "url" => { url = kv.value }
                     "archive" => { archive = kv.value }
                     "binary_path" => { binaryPath = kv.value }
                     _ => {}
@@ -208,8 +217,30 @@ fn parseSourceConfig(content: Text): SourceConfig = {
             None => {}
         }
     }
-    SourceConfig { provider: provider, repo: repo, tag: tag, asset: asset, archive: archive, binaryPath: binaryPath }
+    SourceConfig { provider: provider, repo: repo, tag: tag, asset: asset, url: url, archive: archive, binaryPath: binaryPath }
 }
+
+// The only provider-specific step -- everything downstream (fetch,
+// checksum, extract, place) is identical regardless of how the URL
+// was built.
+fn buildFetchUrl(cfg: SourceConfig, sourcePath: Text, version: Text): Text [io] =
+    match cfg.provider {
+        "github-release" => {
+            if Text.len(cfg.repo) == 0 then fatalText("malformed " ++ sourcePath ++ " (missing repo)")
+            else if Text.len(cfg.asset) == 0 then fatalText("malformed " ++ sourcePath ++ " (missing asset)")
+            else {
+                let tagTemplate = if Text.len(cfg.tag) == 0 then "{version}" else cfg.tag
+                let tag = Text.replace(tagTemplate, "{version}", version)
+                let asset = Text.replace(cfg.asset, "{version}", version)
+                "https://github.com/" ++ cfg.repo ++ "/releases/download/" ++ tag ++ "/" ++ asset
+            }
+        }
+        "url" => {
+            if Text.len(cfg.url) == 0 then fatalText("malformed " ++ sourcePath ++ " (missing url)")
+            else Text.replace(cfg.url, "{version}", version)
+        }
+        _ => fatalText("unsupported provider '" ++ cfg.provider ++ "' in " ++ sourcePath)
+    }
 
 // Verifies against a pinned per-version hash if one exists
 // (sources\<package>\checksums.toml, a flat "<version> = <sha256-hex>"
@@ -248,18 +279,10 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
         pv.package ++ "@" ++ pv.version ++ " <source-file>"
     )
     let cfg = parseSourceConfig(sourceContent)
-
-    if cfg.provider != "github-release" then fatal("unsupported provider '" ++ cfg.provider ++ "' in " ++ sourcePath) else {}
-    if Text.len(cfg.repo) == 0 then fatal("malformed " ++ sourcePath ++ " (missing repo)") else {}
-    if Text.len(cfg.asset) == 0 then fatal("malformed " ++ sourcePath ++ " (missing asset)") else {}
     if Text.len(cfg.binaryPath) == 0 then fatal("malformed " ++ sourcePath ++ " (missing binary_path)") else {}
 
-    let tagTemplate = if Text.len(cfg.tag) == 0 then "{version}" else cfg.tag
-    let tag = Text.replace(tagTemplate, "{version}", pv.version)
-    let asset = Text.replace(cfg.asset, "{version}", pv.version)
     let binaryPath = Text.replace(cfg.binaryPath, "{version}", pv.version)
-
-    let url = "https://github.com/" ++ cfg.repo ++ "/releases/download/" ++ tag ++ "/" ++ asset
+    let url = buildFetchUrl(cfg, sourcePath, pv.version)
     println("fetching " ++ url)
     flush()
 
@@ -282,7 +305,9 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
             if !wrote then fatal("failed to write " ++ dest) else {}
             println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
         }
-        "zip" => {
+        "tar" => {
+            // One `tar -xf` handles zip, tar, tar.gz/tgz alike (verified
+            // against real assets of each) -- no per-format branching needed.
             // No recursive-directory-delete primitive exists in Certo's
             // stdlib, so extraction temp files under home\tmp are left in
             // place rather than cleaned up -- a known simplification, not
@@ -291,16 +316,16 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
             let madeTemp = makeDir(tempDir)
             if !madeTemp then fatal("could not create " ++ tempDir) else {}
 
-            let tempZip = Path.join(tempDir, pv.package ++ "-" ++ pv.version ++ ".zip")
-            let wroteZip = writeFileBytes(tempZip, downloaded)
-            if !wroteZip then fatal("failed to write " ++ tempZip) else {}
+            let tempArchive = Path.join(tempDir, pv.package ++ "-" ++ pv.version ++ ".archive")
+            let wroteArchive = writeFileBytes(tempArchive, downloaded)
+            if !wroteArchive then fatal("failed to write " ++ tempArchive) else {}
 
             let extractDir = Path.join(tempDir, pv.package ++ "-" ++ pv.version ++ "-extracted")
             let madeExtractDir = makeDir(extractDir)
             if !madeExtractDir then fatal("could not create " ++ extractDir) else {}
 
             flush()
-            let code = Process.execInherit("tar", ["-xf", tempZip, "-C", extractDir])
+            let code = Process.execInherit("tar", ["-xf", tempArchive, "-C", extractDir])
             if code != 0 then fatal("tar extraction failed with exit code " ++ intToText(code)) else {}
 
             let extractedFile = Path.join(extractDir, binaryPath)

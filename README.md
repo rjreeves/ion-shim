@@ -164,23 +164,47 @@ provider = "github-release"
 repo = "rjreeves/Certo"
 tag = "v{version}"                  # template; defaults to "{version}" if omitted
 asset = "certo-windows-x86_64.zip"  # template, may also embed {version}
-archive = "zip"                     # "zip" | "none" (raw binary, no extraction)
+archive = "tar"                     # "tar" | "none" (raw binary, no extraction)
 binary_path = "certo.exe"           # where the real binary lands inside the archive
 ```
 
-`{version}` is substituted via `Text.replace` into `tag`, `asset`, and
-`binary_path`. The only provider implemented is `github-release`,
-which builds `https://github.com/<repo>/releases/download/<tag>/<asset>`
-and downloads it with `Http.get` — verified against a real, sizeable
-(2 MB) GitHub release asset served through its actual redirect to a
-CDN, byte-for-byte matching an independent fetch by hash. If
-`archive = "zip"`, the download is extracted with the `tar` binary
-Windows has shipped since 10 (1803) — via `Process.execInherit`, the
-same primitive that runs every shimmed tool — rather than teaching
-Certo to decode ZIP/DEFLATE itself; that's a much bigger addition than
-this project's other stdlib patches for something the OS already does.
-`binary_path` is then copied from the extracted tree into
-`packages\<package>\<version>\`, exactly like the local-file path.
+`{version}` is substituted via `Text.replace` into `tag`/`asset`
+(`github-release`) or `url` (see below), and into `binary_path`
+regardless of provider. Two providers exist:
+
+- **`github-release`** builds `https://github.com/<repo>/releases/download/<tag>/<asset>`
+  — verified against a real, sizeable (2 MB) GitHub release asset served
+  through its actual redirect to a CDN, byte-for-byte matching an
+  independent fetch by hash.
+- **`url`** is a fully-specified template for everything else — GitLab,
+  a project's own server, an npm tarball URL — with no structure
+  assumed beyond `{version}` substitution:
+  ```toml
+  provider = "url"
+  url = "https://example.com/downloads/mytool-{version}-windows.zip"
+  archive = "tar"
+  binary_path = "mytool.exe"
+  ```
+  Verified against a real `.tar.gz` asset fetched by a fully pre-composed
+  URL (no repo/tag/asset fields involved at all) — everything downstream
+  of the URL is identical regardless of which provider built it.
+
+Named providers that would compose a URL from structured fields the way
+`github-release` does — `gitlab-release`, `npm` — aren't implemented:
+their real URL shapes aren't something to guess at without a concrete
+target to verify against, the same way `github-release` and `url` were
+both grounded in real fetches rather than assumed.
+
+Downloaded with `Http.get`, then extracted (if `archive = "tar"`) with
+the `tar` binary Windows has shipped since 10 (1803) — via
+`Process.execInherit`, the same primitive that runs every shimmed tool
+— rather than teaching Certo to decode archive formats itself; that's a
+much bigger addition than this project's other stdlib patches for
+something the OS already does. One `tar -xf` handles `.zip`, `.tar`,
+and `.tar.gz`/`.tgz` alike, verified against a real asset of each, so
+`archive` doesn't need a value per format. `binary_path` is then copied
+from the extracted tree into `packages\<package>\<version>\`, exactly
+like the local-file path.
 
 Downloading a real binary and hashing it both depend on the same
 binary-safety property: `HttpResponse.body()` is `Text` and silently

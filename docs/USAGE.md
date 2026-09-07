@@ -107,7 +107,7 @@ provider = "github-release"
 repo = "rjreeves/Certo"
 tag = "v{version}"
 asset = "certo-windows-x86_64.zip"
-archive = "zip"
+archive = "tar"
 binary_path = "certo.exe"
 ```
 
@@ -117,8 +117,13 @@ ion install certo@1.8.0
 
 This downloads `https://github.com/rjreeves/Certo/releases/download/v1.8.0/certo-windows-x86_64.zip`,
 extracts it (via the `tar` binary bundled with Windows — no extra
-install needed), and places `certo.exe` the same way the local-file
-path would. Add `%LOCALAPPDATA%\Ion\sources\certo\checksums.toml` with
+install needed; `archive = "tar"` handles `.zip`, `.tar`, and
+`.tar.gz`/`.tgz` alike, not just zip despite the name), and places
+`certo.exe` the same way the local-file path would. For anything not
+on GitHub — GitLab, a project's own server — use `provider = "url"`
+with a fully-specified `url = "..."` template instead of
+`repo`/`tag`/`asset`; see the README's "Fetching a package" section.
+Add `%LOCALAPPDATA%\Ion\sources\certo\checksums.toml` with
 a `<version> = "<sha256-hex>"` line to have the download verified
 before it's installed — without one, `ion install` still works, just
 prints an "unverified" warning. See the README's "Fetching a package"
