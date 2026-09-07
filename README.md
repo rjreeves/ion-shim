@@ -82,6 +82,33 @@ Only the version is pinned this way — `package` and `command` still come
 from the global shim descriptor (`shims\<name>.toml`), since that's what
 Ion wrote when the tool was first shimmed.
 
+### Nested projects (monorepos)
+
+A nested package with its own `ion.toml` overrides an ancestor's pin for
+the same tool, since it's simply the nearer file found while climbing:
+
+```toml
+# monorepo/ion.toml
+certo = "1.8.0"
+```
+
+```toml
+# monorepo/packages/backend/ion.toml
+certo = "1.7.0"
+```
+
+Invoking `certo` from `monorepo/packages/backend` resolves to `1.7.0`;
+from `monorepo` itself (or any other sibling package without its own
+pin), it resolves to `1.8.0`. This is "nearest file wins," not
+"innermost value across all files wins": each `ion.toml` is a complete,
+self-contained boundary. A nested file that pins `flux` but says
+nothing about `certo` does **not** cause the climb to continue past it
+to the root's `certo` pin — that case falls straight to the global
+default instead (see the boundary rule above). This deliberately
+matches `asdf`'s `.tool-versions` behavior rather than a cascading
+workspace-inheritance model, so a pin never reaches further up the tree
+than reading one file would suggest.
+
 ### When a pin and the global descriptor conflict
 
 There's only one axis of override — version — and only one direction:
