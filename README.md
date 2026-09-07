@@ -42,18 +42,31 @@ version = "1.8.0"
 
 ## Project-level pinning (`ion.toml`)
 
-A project can pin a different version than the global `ion use` by
-putting an `ion.toml` in its root:
+A project can pin different versions than the global `ion use` by
+putting a single `ion.toml` in its root — one file per project, listing
+every tool that project cares about:
 
 ```toml
 # project-a/ion.toml
 certo = "1.7.0"
+flux  = "1.2.0"
 ```
 
 ```toml
 # project-b/ion.toml
 certo = "1.8.0"
 ```
+
+Each shim only reads its own line: `certo.exe` looks for a `certo =`
+line and ignores `flux =`, and vice versa, so any number of tools can
+share one file without stepping on each other. A `[tools]` header is
+allowed for readability if you want one — the parser has no section
+support, so it's silently skipped as a line with no `=` in it, same as
+any other unrecognized line.
+
+Only exact versions are supported (`certo = "1.7.0"`, not `^1.7` or
+`>=1.7.0`) — a shim should resolve deterministically, not run a semver
+solver, so there's no range/constraint syntax.
 
 The shim walks up from the current directory looking for the nearest
 `ion.toml`. The first one found is the project boundary:
