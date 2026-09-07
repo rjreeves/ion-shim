@@ -25,6 +25,7 @@ fn fatalText(msg: Text): Text [io] = {
 fn usageAndExit(): Unit [io] = {
     eprintln("usage:")
     eprintln("  sym install <package> <version> <source-file> [<command-filename>]")
+    eprintln("  sym uninstall <package> <version>")
     eprintln("  sym shim add <name> <package> <version> [<command-filename>]")
     eprintln("  sym shim remove <name>")
     eprintln("  sym shim list")
@@ -112,8 +113,19 @@ fn copyBytes(from: Text, to: Text): Bool [io] =
         None => false
     }
 
+// Writes via a same-directory temp file + rename rather than writeFile
+// directly, so a sym_shim process reading this exact path never observes
+// a partial write -- renameFile is atomic when both paths are on the same
+// volume, which "path ++ .tmp" always is.
+fn writeFileAtomic(path: Text, content: Text): Bool [io] = {
+    let tempPath = path ++ ".tmp"
+    let wrote = writeFile(tempPath, content)
+    if !wrote then false
+    else renameFile(tempPath, path)
+}
+
 fn writeDescriptor(path: Text, package: Text, command: Text, version: Text): Bool [io] =
-    writeFile(path,
+    writeFileAtomic(path,
         "package = \"" ++ package ++ "\"\n" ++
         "command = \"" ++ command ++ "\"\n" ++
         "version = \"" ++ version ++ "\"\n"
@@ -302,10 +314,6 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
         "tar" => {
             // One `tar -xf` handles zip, tar, tar.gz/tgz alike (verified
             // against real assets of each) -- no per-format branching needed.
-            // No recursive-directory-delete primitive exists in Certo's
-            // stdlib, so extraction temp files under home\tmp are left in
-            // place rather than cleaned up -- a known simplification, not
-            // a correctness concern.
             let tempDir = Path.join(home, "tmp")
             let madeTemp = makeDir(tempDir)
             if !madeTemp then fatal("could not create " ++ tempDir) else {}
@@ -328,6 +336,11 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
             if !copied then
                 fatal("extraction succeeded but could not find/copy '" ++ binaryPath ++ "' inside the archive (looked for " ++ extractedFile ++ ")")
             else {}
+
+            // Best-effort cleanup -- the install already succeeded above,
+            // so a failure here is silently ignored rather than fatal.
+            let _ = deleteFile(tempArchive)
+            let _ = removeDir(extractDir)
             println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
         }
         _ => fatal("unsupported archive type '" ++ cfg.archive ++ "' in " ++ sourcePath)
@@ -411,7 +424,7 @@ fn cmdUse(home: Text): Unit [io] = {
         let d = parseDescriptor(content)
         if d.package == pv.package then {
             let newContent = upsertLine(content, "version", pv.version)
-            let ok = writeFile(path, newContent)
+            let ok = writeFileAtomic(path, newContent)
             if ok then { updated = updated + 1 } else {}
         } else {}
     }
@@ -430,9 +443,28 @@ fn cmdPin(): Unit [io] = {
         None => ""
     }
     let newContent = upsertLine(existing, pv.package, pv.version)
-    let ok = writeFile(path, newContent)
+    let ok = writeFileAtomic(path, newContent)
     if !ok then fatal("failed to write " ++ path) else {}
     println("pinned " ++ pv.package ++ " = " ++ pv.version ++ " in " ++ path)
+}
+
+// Removes packages\<package>\<version>\ outright, regardless of how many
+// shimmed names' descriptors reference that package/version -- matching
+// how `rm` doesn't care who else references a file. Shim descriptors
+// pointing at a now-uninstalled version aren't touched; running that shim
+// afterward hits the ordinary "is not installed" error already handled
+// by sym_shim, the same as if the version had simply never been placed.
+fn cmdUninstall(home: Text): Unit [io] = {
+    let pv = requirePkgVer(arg(2), arg(3), "uninstall")
+    let dir = Path.join(Path.join(Path.join(home, "packages"), pv.package), pv.version)
+    match listDir(dir) {
+        None => println(pv.package ++ "@" ++ pv.version ++ " is not installed (nothing to remove)")
+        Some(_) => {
+            let removed = removeDir(dir)
+            if removed then println("uninstalled " ++ pv.package ++ "@" ++ pv.version ++ " (removed " ++ dir ++ ")")
+            else fatal("failed to fully remove " ++ dir ++ " (check for files in use)")
+        }
+    }
 }
 
 fn main(): Unit [io] = {
@@ -443,6 +475,10 @@ fn main(): Unit [io] = {
         "install" => {
             let home = symHome()
             cmdInstall(home)
+        }
+        "uninstall" => {
+            let home = symHome()
+            cmdUninstall(home)
         }
         "use" => {
             let home = symHome()

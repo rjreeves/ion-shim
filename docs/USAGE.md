@@ -6,7 +6,7 @@ For the design rationale behind each of these behaviors, see the main
 
 **Scope note:** this repo ships two things — the shim binary
 (`src/sym_shim.cto`) and a small `sym` CLI (`src/sym.cto`) implementing
-`install`/`use`/`shim add`/`shim remove`/`shim list`/`pin`. `install`
+`install`/`uninstall`/`use`/`shim add`/`shim remove`/`shim list`/`pin`. `install`
 can fetch a real GitHub release itself (with checksum verification) or
 take an already-obtained local file — see step 4. Every section below
 also shows the raw filesystem operations each `sym` command performs
@@ -21,13 +21,14 @@ from source, pinned to the exact commit `sym`/`sym_shim` are verified
 against:
 
 ```bash
-cargo install --git https://github.com/rjreeves/Certo --rev f0254c334efeae2404696d64da103ab306658433 certo
+cargo install --git https://github.com/rjreeves/Certo --rev 9cf8298ffb91fb01203bd292a110607134de9d2e certo
 ```
 
-That commit is the first one with everything this project needs
-(`Process.execInherit`, `getCurrentDir`, `HttpResponse.bodyBytes`) —
-verified by building both `.cto` files against it directly. Certo has
-exactly one tagged release (`v0.1.0`, June 2026), predating all three,
+That commit is the one with everything this project needs
+(`Process.execInherit`, `getCurrentDir`, `HttpResponse.bodyBytes`,
+`renameFile`, `removeDir`) — verified by building both `.cto` files
+against it directly. Certo has
+exactly one tagged release (`v0.1.0`, June 2026), predating all five,
 so a release build won't work here; pinning to a commit instead of
 `--branch master` means a future, unrelated change to Certo's `master`
 can't silently break this project's build. Re-pin to a newer commit
@@ -46,7 +47,7 @@ certo src/sym.cto -o sym.exe
 ```
 
 `sym_shim.exe` is generic — it doesn't know which tool it's fronting
-until you copy it under a specific name (step 5). `sym.exe` is the CLI
+until you copy it under a specific name (step 6). `sym.exe` is the CLI
 that does that copying and the rest of the bookkeeping for you; keep it
 wherever's convenient on your own `PATH` (it isn't part of the `Sym\`
 layout itself, unlike the shim).
@@ -141,7 +142,21 @@ prints an "unverified" warning. See the README's "Fetching a package"
 section for the full format and the reasoning behind pinning checksums
 separately rather than trusting whatever the release itself publishes.
 
-## 5. Shim the tool
+## 5. Remove an installed version
+
+```bash
+sym uninstall certo 1.7.0
+```
+
+Deletes `packages\certo\1.7.0\` outright, including every file in it,
+regardless of how many shimmed names still have descriptors pointing at
+that package/version. Nothing shimmed is touched — a descriptor or
+`sym.toml` pin still pointing at a now-uninstalled version just hits
+the ordinary "is not installed" error the next time that shim runs.
+Running it again for a version that's already gone prints a message
+and exits `0`, not an error.
+
+## 6. Shim the tool
 
 ```bash
 sym shim add certo certo 1.8.0
@@ -176,7 +191,7 @@ shimmed name; `sym shim remove certo` deletes both `bin\certo.exe` and
 `shims\certo.toml` (leaving installed packages alone, since another
 name might still reference the same package/version).
 
-## 6. Switch versions
+## 7. Switch versions
 
 Install the new version the same way as step 4, then:
 
@@ -199,7 +214,7 @@ No rebuild, no PATH change, no re-copying the shim. This is the entire
 value of the design — switching is a one-line text edit, whether you
 make it yourself or `sym use` makes it for you.
 
-## 7. Pin a version per-project
+## 8. Pin a version per-project
 
 ```bash
 cd my-project
@@ -237,7 +252,7 @@ entirely, it doesn't merge with parent files).
 pin a tool that was never shimmed, you'll get a specific error telling
 you so (see the error reference below).
 
-## 8. Set up a version alias (`latest`, `lts`, ...)
+## 9. Set up a version alias (`latest`, `lts`, ...)
 
 Create a directory junction (not a symlink — junctions don't need admin
 rights):
@@ -255,7 +270,7 @@ version is installed to make it track forward, or leave it alone to
 keep it frozen. See the README for the reproducibility caveat about
 using a floating alias in a checked-in project pin.
 
-## 9. Shim a multi-binary release (a "toolchain")
+## 10. Shim a multi-binary release (a "toolchain")
 
 If a release exposes several binaries — Certo's ships `certo`,
 `certo-fmt`, `certo-lsp`, and more — place them all in the same version
@@ -293,9 +308,9 @@ value together (a real `sym use` would automate this by scanning
 |---|---|---|
 | `no argv[0]` | The OS didn't provide an invocation name at all — shouldn't happen in practice. | Investigate how the process was spawned. |
 | `LOCALAPPDATA is not set` | The `LOCALAPPDATA` environment variable is missing and `SYM_HOME` wasn't set either. | Set `SYM_HOME` explicitly, or fix your environment. |
-| `no shim descriptor for '<name>'` | Nothing at `shims\<name>.toml` exists, and no `sym.toml` pins that name either. | The tool was never shimmed — do step 5. |
-| `'<name>' is pinned to <version> in sym.toml, but has never been shimmed globally ... run 'sym shim add <name> <package> <version>' first` | A `sym.toml` pins a tool with no matching global descriptor. | Do step 5 for that tool name first; the pin alone isn't enough. |
-| `malformed shim descriptor <path> (need package, command, version)` | The descriptor is missing one of the three required fields. | Check the file against the format in step 5b. |
+| `no shim descriptor for '<name>'` | Nothing at `shims\<name>.toml` exists, and no `sym.toml` pins that name either. | The tool was never shimmed — do step 6. |
+| `'<name>' is pinned to <version> in sym.toml, but has never been shimmed globally ... run 'sym shim add <name> <package> <version>' first` | A `sym.toml` pins a tool with no matching global descriptor. | Do step 6 for that tool name first; the pin alone isn't enough. |
+| `malformed shim descriptor <path> (need package, command, version)` | The descriptor is missing one of the three required fields. | Check the file against the format in step 6b. |
 | `<package>@<version> is not installed (looked for <path>)` | The resolved version (from the descriptor or a pin) has no matching folder under `packages\`. | Install that version (step 4), fix the typo in the descriptor/pin, or point a version alias there. |
 
 Every error exits with code `127` and prints to stderr, prefixed

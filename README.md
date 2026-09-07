@@ -6,7 +6,7 @@ active version of whatever it was invoked as and re-execs it — with real
 stdin/stdout/stderr passthrough and exact exit-code propagation.
 
 `src/sym.cto` builds a small `sym` CLI implementing the management side
-— `install`/`use`/`shim add`/`shim remove`/`shim list`/`pin` — that
+— `install`/`uninstall`/`use`/`shim add`/`shim remove`/`shim list`/`pin` — that
 writes and reads exactly the files described below. `install` can take
 an already-obtained local file, or fetch a real GitHub release itself
 (with checksum verification) given a `sources\<package>.toml` — see
@@ -70,6 +70,19 @@ version = "1.8.0"
 ```
 
 `SYM_HOME` overrides `%LOCALAPPDATA%\Sym` (mainly for testing).
+
+### Write safety
+
+Every place `sym` rewrites a descriptor or `sym.toml` (`shim add`,
+`use`, `pin`) writes to a `.tmp` file in the same directory first, then
+renames it over the real target, rather than writing the target
+in-place. `renameFile` — added to Certo's stdlib for this — is atomic
+when both paths are on the same volume, which a same-directory `.tmp`
+file always is, so a `sym_shim` process reading that exact path can
+never observe a half-written file mid-update. Verified directly: write
+a target file, write new content to a temp file, rename over the
+target, confirm the target now has the new content and the temp file
+is gone.
 
 ## Toolchains (a release with more than one binary)
 
@@ -254,10 +267,27 @@ explicitly recorded. A mismatch is fatal and installs nothing: verified
 by fetching a real release with a deliberately wrong pinned hash and
 confirming no file was written.
 
-Extraction leaves its temporary files under `Sym\tmp\` rather than
-cleaning them up — there's no recursive-directory-delete primitive in
-Certo's stdlib, and adding one felt like scope creep for a first cut of
-fetching. A known simplification, not a correctness issue.
+Extraction temp files under `Sym\tmp\` are cleaned up (deleted archive,
+removed extraction directory) once the binary's been copied out —
+verified against a real fetch, `tmp\` is empty afterward. Cleanup is
+best-effort: a failure there doesn't fail the install, since the actual
+install already succeeded by that point.
+
+## Uninstalling a package (`sym uninstall <package> <version>`)
+
+```bash
+sym uninstall certo 1.7.0
+```
+
+Removes `packages\certo\1.7.0\` outright — recursively, including every
+file in it — regardless of how many shimmed names' descriptors still
+reference that package/version, the same way `rm` doesn't care who else
+references a file. Nothing shimmed gets touched: a descriptor or
+`sym.toml` pin still pointing at a now-uninstalled version just hits the
+ordinary "is not installed" error the next time that shim runs, same as
+if the version had never been placed there at all. Uninstalling a
+version that's already gone is a no-op (prints a message, exits `0`),
+not an error — verified by running it twice in a row.
 
 ## Project-level pinning (`sym.toml`)
 
@@ -422,3 +452,27 @@ compiler, fixed or worked around here:
    exactly. This was necessary groundwork for `sym install`'s fetch
    path (see "Fetching a package" above), which needs to download and
    hash real binaries without corrupting them.
+
+6. **No way to atomically replace a file.** Needed for the write-safety
+   work above — `writeFile` truncates and rewrites in place, so a reader
+   could observe a half-written file mid-update; the standard fix is
+   write-to-temp-then-rename, which only works if the rename itself is
+   atomic. Added `renameFile(from, to): Bool` to the compiler
+   (`crates/stdlib/src/file.rs`, plus `seed.rs` registration) —
+   `MoveFileExA` with `MOVEFILE_REPLACE_EXISTING` on Windows (atomic on
+   the same volume), `rename()` on POSIX (already atomic there).
+   Verified directly: write a target file, write new content to a
+   `.tmp` file, rename over the target, confirm the target has the new
+   content and the temp file is gone.
+
+7. **No recursive directory removal at all.** Needed for `sym
+   uninstall` (deleting `packages\<package>\<version>\`, which can
+   contain more than one file for a toolchain) and for cleaning up
+   fetch/extraction temp directories. Added `removeDir(path): Bool` —
+   walks and deletes contents before removing the directory itself,
+   continuing past individual failures rather than stopping at the
+   first one so a partially-removable tree still gets cleaned up as
+   much as possible. Verified against a real nested tree (a
+   subdirectory plus files at two levels): everything gone afterward,
+   confirmed independently on the real filesystem, not just via Certo's
+   own `fileExists`.
