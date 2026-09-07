@@ -7,9 +7,10 @@ stdin/stdout/stderr passthrough and exact exit-code propagation.
 
 `src/ion.cto` builds a small `ion` CLI implementing the management side
 — `install`/`use`/`shim add`/`shim remove`/`shim list`/`pin` — that
-writes and reads exactly the files described below. It doesn't fetch
-anything yet (`ion install` takes an already-obtained local file, not a
-URL), so acquisition is still a separate, unimplemented concern.
+writes and reads exactly the files described below. `install` can take
+an already-obtained local file, or fetch a real GitHub release itself
+(with checksum verification) given a `sources\<package>.toml` — see
+"Fetching a package" below.
 
 This README covers the design; for step-by-step setup see
 [docs/USAGE.md](docs/USAGE.md), and for a line-by-line explanation of
@@ -152,6 +153,77 @@ building the same project at different times could silently get
 different versions. Fine for a global default; worth avoiding in a
 project pin meant to be reproducible.
 
+## Fetching a package (`ion install <package>@<version>`, no local file)
+
+`ion install` takes an already-downloaded file if you give it one; if
+you don't, it fetches instead, using a per-package config that says how:
+
+```toml
+# sources\certo.toml
+provider = "github-release"
+repo = "rjreeves/Certo"
+tag = "v{version}"                  # template; defaults to "{version}" if omitted
+asset = "certo-windows-x86_64.zip"  # template, may also embed {version}
+archive = "zip"                     # "zip" | "none" (raw binary, no extraction)
+binary_path = "certo.exe"           # where the real binary lands inside the archive
+```
+
+`{version}` is substituted via `Text.replace` into `tag`, `asset`, and
+`binary_path`. The only provider implemented is `github-release`,
+which builds `https://github.com/<repo>/releases/download/<tag>/<asset>`
+and downloads it with `Http.get` — verified against a real, sizeable
+(2 MB) GitHub release asset served through its actual redirect to a
+CDN, byte-for-byte matching an independent fetch by hash. If
+`archive = "zip"`, the download is extracted with the `tar` binary
+Windows has shipped since 10 (1803) — via `Process.execInherit`, the
+same primitive that runs every shimmed tool — rather than teaching
+Certo to decode ZIP/DEFLATE itself; that's a much bigger addition than
+this project's other stdlib patches for something the OS already does.
+`binary_path` is then copied from the extracted tree into
+`packages\<package>\<version>\`, exactly like the local-file path.
+
+Downloading a real binary and hashing it both depend on the same
+binary-safety property: `HttpResponse.body()` is `Text` and silently
+truncates at the first embedded `0x00` byte (confirmed with a real
+file — see the stdlib gaps section), so both the download and the
+integrity check go through `Bytes` the whole way — `bodyBytes()` for
+the response, `Crypto.sha256Bytes`/`Bytes.toHex` for hashing it, never
+converting through `Text` in between.
+
+### Checksum verification
+
+A checksum is per-*version*, but a source config is per-*package* —
+one file, many versions — so the expected hash lives in a sibling file,
+keyed by version, reusing the exact same flat-file lookup `ion.toml`
+already uses:
+
+```toml
+# sources\certo\checksums.toml
+1.7.0 = "aaa111..."
+1.8.0 = "bbb222..."
+```
+
+This is a deliberate choice over trusting a checksum file published
+alongside the release itself: a pinned, separately-maintained hash
+gives real tamper detection (the expected value doesn't come from
+wherever the binary came from), whereas a fetched sidecar only catches
+network corruption — an attacker controlling the release could change
+both the binary and its published checksum together. The cost is
+curation: someone has to add a line per new version.
+
+If a version has no entry in `checksums.toml` — or the file doesn't
+exist at all — install proceeds anyway, but prints a visible warning
+that the download is unverified, rather than either silently skipping
+verification or refusing to install any version that was never
+explicitly recorded. A mismatch is fatal and installs nothing: verified
+by fetching a real release with a deliberately wrong pinned hash and
+confirming no file was written.
+
+Extraction leaves its temporary files under `Ion\tmp\` rather than
+cleaning them up — there's no recursive-directory-delete primitive in
+Certo's stdlib, and adding one felt like scope creep for a first cut of
+fetching. A known simplification, not a correctness issue.
+
 ## Project-level pinning (`ion.toml`)
 
 A project can pin different versions than the global `ion use` by
@@ -268,9 +340,7 @@ compiler, fixed or worked around here:
    Windows, `fork`/`execvp` on POSIX — so the child is truly attached to
    the shim's own console. Verified with a real child process: live
    interleaved output, forwarded stdin, and exact exit code (7) round-tripped
-   through the shim. This is upstream in the Certo checkout at
-   `C:\Users\robert\Desktop\Certo` (uncommitted — not pushed since it
-   wasn't asked for).
+   through the shim. This is upstream in [rjreeves/Certo](https://github.com/rjreeves/Certo).
 
 2. **`??` does not short-circuit.** `a ?? b` is documented as returning
    `a` unwrapped when `Some`, else `b` — but the compiler evaluates `b`
@@ -294,4 +364,22 @@ compiler, fixed or worked around here:
    Left unmarked `[io]`, matching `getEnv`'s existing convention (reads
    process-local state that's static for the run, absent a `setCurrentDir`
    primitive, which doesn't exist either). Verified from two different
-   working directories. Also uncommitted in the Certo checkout.
+   working directories.
+
+5. **`HttpResponse` had no binary-safe way to read a response body.**
+   `.body(): Text` is NUL-terminated like everything else Text-typed, so
+   any response containing an embedded `0x00` byte — any real binary,
+   an executable or an archive — gets silently truncated. Confirmed with
+   a real download: `github.com/favicon.ico`'s first byte is `0x00`, so
+   `.body()` returned an *empty* string while `.bodyLength()` correctly
+   reported 6518. The internal buffer was already binary-safe (length-
+   tracked, never truncated while reading off the wire); it just had no
+   accessor exposing that. Added `HttpResponse.bodyBytes(): Bytes` to
+   the compiler (`crates/stdlib/src/http.rs`, plus `seed.rs`
+   registration), copying the same already-correct buffer into a real
+   `Bytes` value. Verified against a real 2 MB GitHub release asset
+   (fetched through its actual redirect to a CDN): SHA-256 hash and
+   byte size both matched an independent `Invoke-WebRequest` fetch
+   exactly. This was necessary groundwork for `ion install`'s fetch
+   path (see "Fetching a package" above), which needs to download and
+   hash real binaries without corrupting them.

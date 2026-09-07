@@ -7,6 +7,9 @@ import Stdlib.Path
 import Stdlib.Env
 import Stdlib.Collections
 import Stdlib.Bytes
+import Stdlib.Process
+import Stdlib.Http
+import Stdlib.Crypto
 
 fn fatal(msg: Text): Unit [io] = {
     eprintln("ion: " ++ msg)
@@ -54,6 +57,19 @@ fn parseKVLine(line: Text): KeyValue? = {
         })
         None => None
     }
+}
+
+fn findKeyIn(content: Text, wantedKey: Text): Text? = {
+    var result: Text? = None
+    for line in Text.split(content, "\n") {
+        match parseKVLine(line) {
+            Some(kv) => {
+                if kv.key == wantedKey then { result = Some(kv.value) } else {}
+            }
+            None => {}
+        }
+    }
+    result
 }
 
 type PkgVer = { package: Text, version: Text }
@@ -166,20 +182,157 @@ fn listTomlFiles(dir: Text): List<Text> = {
     result
 }
 
-fn cmdInstall(home: Text): Unit [io] = {
-    let pv = requirePkgVer(unwrapOrFatal(arg(2), "install: missing <package>@<version>"))
-    let source = unwrapOrFatal(arg(3), "install: missing <source-file>")
-    let commandName = arg(4) ?? Path.basename(source)
+// Reads sources\<package>.toml -- the per-package "how to fetch" config.
+type SourceConfig = { provider: Text, repo: Text, tag: Text, asset: Text, archive: Text, binaryPath: Text }
+
+fn parseSourceConfig(content: Text): SourceConfig = {
+    var provider = ""
+    var repo = ""
+    var tag = ""
+    var asset = ""
+    var archive = "none"
+    var binaryPath = ""
+    for line in Text.split(content, "\n") {
+        match parseKVLine(line) {
+            Some(kv) => {
+                match kv.key {
+                    "provider" => { provider = kv.value }
+                    "repo" => { repo = kv.value }
+                    "tag" => { tag = kv.value }
+                    "asset" => { asset = kv.value }
+                    "archive" => { archive = kv.value }
+                    "binary_path" => { binaryPath = kv.value }
+                    _ => {}
+                }
+            }
+            None => {}
+        }
+    }
+    SourceConfig { provider: provider, repo: repo, tag: tag, asset: asset, archive: archive, binaryPath: binaryPath }
+}
+
+// Verifies against a pinned per-version hash if one exists
+// (sources\<package>\checksums.toml, a flat "<version> = <sha256-hex>"
+// file -- reuses findKeyIn exactly as ion.toml does), and warns rather
+// than silently skipping verification when there isn't one.
+fn verifyChecksum(sourcesDir: Text, pv: PkgVer, downloaded: Bytes): Unit [io] = {
+    let checksumsPath = Path.join(Path.join(sourcesDir, pv.package), "checksums.toml")
+    match readFile(checksumsPath) {
+        Some(content) => {
+            match findKeyIn(content, pv.version) {
+                Some(expected) => {
+                    let actual = Bytes.toHex(Crypto.sha256Bytes(downloaded))
+                    if Text.toLower(actual) == Text.toLower(expected) then {
+                        println("checksum verified")
+                    } else {
+                        fatal(
+                            "checksum mismatch for " ++ pv.package ++ "@" ++ pv.version ++
+                            ": expected " ++ expected ++ ", got " ++ actual
+                        )
+                    }
+                }
+                None => println("warning: no pinned checksum for " ++ pv.package ++ "@" ++ pv.version ++ " -- download unverified")
+            }
+        }
+        None => println("warning: no checksums file for '" ++ pv.package ++ "' -- download unverified")
+    }
+}
+
+fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
+    let sourcesDir = Path.join(home, "sources")
+    let sourcePath = Path.join(sourcesDir, pv.package ++ ".toml")
+    let sourceContent = unwrapOrFatal(
+        readFile(sourcePath),
+        "no source config for '" ++ pv.package ++ "' (expected " ++ sourcePath ++
+        ") -- can't fetch without one; pass a local file instead: ion install " ++
+        pv.package ++ "@" ++ pv.version ++ " <source-file>"
+    )
+    let cfg = parseSourceConfig(sourceContent)
+
+    if cfg.provider != "github-release" then fatal("unsupported provider '" ++ cfg.provider ++ "' in " ++ sourcePath) else {}
+    if Text.len(cfg.repo) == 0 then fatal("malformed " ++ sourcePath ++ " (missing repo)") else {}
+    if Text.len(cfg.asset) == 0 then fatal("malformed " ++ sourcePath ++ " (missing asset)") else {}
+    if Text.len(cfg.binaryPath) == 0 then fatal("malformed " ++ sourcePath ++ " (missing binary_path)") else {}
+
+    let tagTemplate = if Text.len(cfg.tag) == 0 then "{version}" else cfg.tag
+    let tag = Text.replace(tagTemplate, "{version}", pv.version)
+    let asset = Text.replace(cfg.asset, "{version}", pv.version)
+    let binaryPath = Text.replace(cfg.binaryPath, "{version}", pv.version)
+
+    let url = "https://github.com/" ++ cfg.repo ++ "/releases/download/" ++ tag ++ "/" ++ asset
+    println("fetching " ++ url)
+    flush()
+
+    let r = Http.get(url)
+    if !HttpResponse.ok(r) then
+        fatal("download failed: HTTP " ++ intToText(HttpResponse.status(r)) ++ " for " ++ url)
+    else {}
+
+    let downloaded = HttpResponse.bodyBytes(r)
+    verifyChecksum(sourcesDir, pv, downloaded)
 
     let destDir = Path.join(Path.join(Path.join(home, "packages"), pv.package), pv.version)
-    let madeDir = makeDir(destDir)
-    if !madeDir then fatal("could not create " ++ destDir) else {}
+    let madeDestDir = makeDir(destDir)
+    if !madeDestDir then fatal("could not create " ++ destDir) else {}
 
-    let dest = Path.join(destDir, commandName)
-    let copied = copyBytes(source, dest)
-    if !copied then fatal("failed to install: could not read '" ++ source ++ "' or write '" ++ dest ++ "'") else {}
+    match cfg.archive {
+        "none" => {
+            let dest = Path.join(destDir, Path.basename(binaryPath))
+            let wrote = writeFileBytes(dest, downloaded)
+            if !wrote then fatal("failed to write " ++ dest) else {}
+            println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
+        }
+        "zip" => {
+            // No recursive-directory-delete primitive exists in Certo's
+            // stdlib, so extraction temp files under home\tmp are left in
+            // place rather than cleaned up -- a known simplification, not
+            // a correctness concern.
+            let tempDir = Path.join(home, "tmp")
+            let madeTemp = makeDir(tempDir)
+            if !madeTemp then fatal("could not create " ++ tempDir) else {}
 
-    println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
+            let tempZip = Path.join(tempDir, pv.package ++ "-" ++ pv.version ++ ".zip")
+            let wroteZip = writeFileBytes(tempZip, downloaded)
+            if !wroteZip then fatal("failed to write " ++ tempZip) else {}
+
+            let extractDir = Path.join(tempDir, pv.package ++ "-" ++ pv.version ++ "-extracted")
+            let madeExtractDir = makeDir(extractDir)
+            if !madeExtractDir then fatal("could not create " ++ extractDir) else {}
+
+            flush()
+            let code = Process.execInherit("tar", ["-xf", tempZip, "-C", extractDir])
+            if code != 0 then fatal("tar extraction failed with exit code " ++ intToText(code)) else {}
+
+            let extractedFile = Path.join(extractDir, binaryPath)
+            let dest = Path.join(destDir, Path.basename(binaryPath))
+            let copied = copyBytes(extractedFile, dest)
+            if !copied then
+                fatal("extraction succeeded but could not find/copy '" ++ binaryPath ++ "' inside the archive (looked for " ++ extractedFile ++ ")")
+            else {}
+            println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
+        }
+        _ => fatal("unsupported archive type '" ++ cfg.archive ++ "' in " ++ sourcePath)
+    }
+}
+
+fn cmdInstall(home: Text): Unit [io] = {
+    let pv = requirePkgVer(unwrapOrFatal(arg(2), "install: missing <package>@<version>"))
+    match arg(3) {
+        Some(source) => {
+            let commandName = arg(4) ?? Path.basename(source)
+
+            let destDir = Path.join(Path.join(Path.join(home, "packages"), pv.package), pv.version)
+            let madeDir = makeDir(destDir)
+            if !madeDir then fatal("could not create " ++ destDir) else {}
+
+            let dest = Path.join(destDir, commandName)
+            let copied = copyBytes(source, dest)
+            if !copied then fatal("failed to install: could not read '" ++ source ++ "' or write '" ++ dest ++ "'") else {}
+
+            println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
+        }
+        None => fetchInstall(home, pv)
+    }
 }
 
 fn cmdShimAdd(home: Text): Unit [io] = {

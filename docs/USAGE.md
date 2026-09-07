@@ -6,13 +6,12 @@ For the design rationale behind each of these behaviors, see the main
 
 **Scope note:** this repo ships two things — the shim binary
 (`src/ion_shim.cto`) and a small `ion` CLI (`src/ion.cto`) implementing
-`install`/`use`/`shim add`/`shim remove`/`shim list`/`pin`. What `ion`
-does **not** do yet is fetch anything — `ion install` takes an
-already-obtained local file, not a URL or package name to download.
-Every section below shows both the `ion` command and, underneath it,
-the raw filesystem operations it performs — useful for understanding
-what's actually happening, or for scripting around `ion` if you'd
-rather not depend on it.
+`install`/`use`/`shim add`/`shim remove`/`shim list`/`pin`. `install`
+can fetch a real GitHub release itself (with checksum verification) or
+take an already-obtained local file — see step 4. Every section below
+also shows the raw filesystem operations each `ion` command performs
+— useful for understanding what's actually happening, or for scripting
+around `ion` if you'd rather not depend on it.
 
 ## 1. Prerequisites
 
@@ -79,8 +78,10 @@ change ever required, no matter how many tools you shim later.
 
 ## 4. Install a real version of a tool
 
-You already need the actual binary on disk somewhere — `ion install`
-places it, it doesn't fetch it:
+Two ways: give `ion install` a file you already have, or let it fetch
+one.
+
+**With a local file:**
 
 ```bash
 ion install certo@1.8.0 C:\path\to\certo-1.8.0.exe certo.exe
@@ -96,6 +97,33 @@ name. Equivalent by hand:
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Ion\packages\certo\1.8.0"
 Copy-Item "C:\path\to\certo-1.8.0.exe" "$env:LOCALAPPDATA\Ion\packages\certo\1.8.0\certo.exe"
 ```
+
+**Fetching instead** — omit the file argument, and write a source
+config once per package first:
+
+```toml
+# %LOCALAPPDATA%\Ion\sources\certo.toml
+provider = "github-release"
+repo = "rjreeves/Certo"
+tag = "v{version}"
+asset = "certo-windows-x86_64.zip"
+archive = "zip"
+binary_path = "certo.exe"
+```
+
+```bash
+ion install certo@1.8.0
+```
+
+This downloads `https://github.com/rjreeves/Certo/releases/download/v1.8.0/certo-windows-x86_64.zip`,
+extracts it (via the `tar` binary bundled with Windows — no extra
+install needed), and places `certo.exe` the same way the local-file
+path would. Add `%LOCALAPPDATA%\Ion\sources\certo\checksums.toml` with
+a `<version> = "<sha256-hex>"` line to have the download verified
+before it's installed — without one, `ion install` still works, just
+prints an "unverified" warning. See the README's "Fetching a package"
+section for the full format and the reasoning behind pinning checksums
+separately rather than trusting whatever the release itself publishes.
 
 ## 5. Shim the tool
 
