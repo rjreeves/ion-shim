@@ -40,6 +40,59 @@ version = "1.8.0"
 
 `ION_HOME` overrides `%LOCALAPPDATA%\Ion` (mainly for testing).
 
+## Toolchains (a release with more than one binary)
+
+Certo's own release ships several binaries — `certo`, `certo-fmt`,
+`certo-lsp`, `xeq`, and more — and Rust's is bigger still (`rustc`,
+`cargo`, `rustfmt`, `clippy`, `rust-analyzer`, ...). Fronting all of
+them needs **no shim changes**: a toolchain is just several descriptors
+that share `package` and `version` but each name their own `command`,
+all reading from one shared version directory:
+
+```
+packages\certo\1.8.0\
+    certo.exe
+    certo-fmt.exe
+```
+
+```toml
+# shims\certo.toml
+package = "certo"
+command = "certo.exe"
+version = "1.8.0"
+```
+
+```toml
+# shims\certo-fmt.toml
+package = "certo"
+command = "certo-fmt.exe"
+version = "1.8.0"
+```
+
+Verified: `certo.exe` and `certo-fmt.exe`, shimmed independently like
+this, each resolve to their own binary inside the same
+`packages\certo\1.8.0\` folder. `package`, `command`, and `version`
+were already three independent fields per descriptor — nothing stopped
+several descriptors from agreeing on two of them while differing on the
+third. This mirrors how `rustup` treats a toolchain as one coordinated
+bundle rather than versioning `rustc` and `cargo` separately.
+
+That leaves exactly one real problem, and it belongs to whatever
+installs packages, not the shim:
+
+- **Coherent switching.** `ion use certo@1.9.0` needs to move every
+  descriptor with `package = "certo"` to `1.9.0` together, so `certo`
+  and `certo-fmt` never end up on different versions. This needs no
+  extra bookkeeping beyond what already exists — since every descriptor
+  already records its own `package`, switching just means scanning
+  `shims\*.toml` for matches and rewriting all of them.
+- **First install still needs a manifest.** Before any descriptors
+  exist, something has to know that `certo@1.8.0` exposes `certo`,
+  `certo-fmt`, `certo-lsp`, `xeq`, etc., so it knows which names to shim
+  and which binaries to place in that shared version folder — that has
+  to come from a release manifest (or, for Certo specifically, its own
+  workspace member list) rather than being inferred.
+
 ## Version aliases (`latest`, `lts`, ...)
 
 Both `version` in a shim descriptor and a pin in `ion.toml` can be a
