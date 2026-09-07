@@ -292,7 +292,7 @@ let content = match readFile(descriptorPath) {
             fatal(
                 "'" ++ exeName ++ "' is pinned to " ++ v ++ " in sym.toml, but has never " ++
                 "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'sym shim add " ++
-                exeName ++ " <package>@" ++ v ++ "' first"
+                exeName ++ " <package> " ++ v ++ "' first"
             )
             ""
         }
@@ -312,7 +312,7 @@ two genuinely different situations:
 - **No pin and no descriptor**: the tool was simply never shimmed.
   Generic message.
 - **A pin exists, but no descriptor**: someone wrote `certo = "1.7.0"`
-  in an `sym.toml` for a tool that was never `sym shim add`-ed
+  in a `sym.toml` for a tool that was never `sym shim add`-ed
   globally. Without checking the pin first, this would produce the
   same generic "no shim descriptor" message, giving no hint that a pin
   exists at all — a genuinely confusing failure mode to debug blind.
@@ -355,7 +355,7 @@ for line in Text.split(content, "\n") {
 
 This duplicates the parsing logic in `parseKVLine`/`findKeyIn` rather
 than reusing them, because the three fields here have fixed, known
-names (unlike an `sym.toml`'s arbitrary tool names) and are collected
+names (unlike a `sym.toml`'s arbitrary tool names) and are collected
 into three separate mutable variables rather than looked up by a
 single key. It was left as its own loop rather than refactored to
 share code with `findKeyIn`, since both are small, independently

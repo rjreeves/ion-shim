@@ -84,7 +84,7 @@ one.
 **With a local file:**
 
 ```bash
-sym install certo@1.8.0 C:\path\to\certo-1.8.0.exe certo.exe
+sym install certo 1.8.0 C:\path\to\certo-1.8.0.exe certo.exe
 ```
 
 This copies (binary-safe — see the code walkthrough for why that
@@ -112,7 +112,7 @@ binary_path = "certo.exe"
 ```
 
 ```bash
-sym install certo@1.8.0
+sym install certo 1.8.0
 ```
 
 This downloads `https://github.com/rjreeves/Certo/releases/download/v1.8.0/certo-windows-x86_64.zip`,
@@ -133,14 +133,14 @@ separately rather than trusting whatever the release itself publishes.
 ## 5. Shim the tool
 
 ```bash
-sym shim add certo certo@1.8.0
+sym shim add certo certo 1.8.0
 ```
 
 This copies `shim\sym_shim.exe` to `bin\certo.exe` (always re-copying,
 even if already present — cheap, and picks up a rebuilt shim
-automatically) and writes `shims\certo.toml`. An optional fourth
+automatically) and writes `shims\certo.toml`. An optional fifth
 argument names the command inside the version folder if it isn't
-`<name>.exe` (e.g. `sym shim add certo certo@1.8.0 certo-cli.exe`).
+`<name>.exe` (e.g. `sym shim add certo certo 1.8.0 certo-cli.exe`).
 Equivalent by hand:
 
 ```powershell
@@ -170,7 +170,7 @@ name might still reference the same package/version).
 Install the new version the same way as step 4, then:
 
 ```bash
-sym use certo@1.9.0
+sym use certo 1.9.0
 ```
 
 This rewrites `version` in **every** `shims\*.toml` whose `package`
@@ -192,13 +192,13 @@ make it yourself or `sym use` makes it for you.
 
 ```bash
 cd my-project
-sym pin certo@1.7.0
+sym pin certo 1.7.0
 ```
 
-Writes (or updates, preserving every other line including comments) an
+Writes (or updates, preserving every other line including comments) a
 `sym.toml` in the current directory to override the global version for
 just that directory tree. Pass a directory as a third argument to pin
-somewhere other than the current one: `sym pin certo@1.7.0 C:\path\to\project`.
+somewhere other than the current one: `sym pin certo 1.7.0 C:\path\to\project`.
 By hand, that's just:
 
 ```toml
@@ -283,7 +283,7 @@ value together (a real `sym use` would automate this by scanning
 | `no argv[0]` | The OS didn't provide an invocation name at all — shouldn't happen in practice. | Investigate how the process was spawned. |
 | `LOCALAPPDATA is not set` | The `LOCALAPPDATA` environment variable is missing and `SYM_HOME` wasn't set either. | Set `SYM_HOME` explicitly, or fix your environment. |
 | `no shim descriptor for '<name>'` | Nothing at `shims\<name>.toml` exists, and no `sym.toml` pins that name either. | The tool was never shimmed — do step 5. |
-| `'<name>' is pinned to <version> in sym.toml, but has never been shimmed globally ... run 'sym shim add <name> <package>@<version>' first` | An `sym.toml` pins a tool with no matching global descriptor. | Do step 5 for that tool name first; the pin alone isn't enough. |
+| `'<name>' is pinned to <version> in sym.toml, but has never been shimmed globally ... run 'sym shim add <name> <package> <version>' first` | A `sym.toml` pins a tool with no matching global descriptor. | Do step 5 for that tool name first; the pin alone isn't enough. |
 | `malformed shim descriptor <path> (need package, command, version)` | The descriptor is missing one of the three required fields. | Check the file against the format in step 5b. |
 | `<package>@<version> is not installed (looked for <path>)` | The resolved version (from the descriptor or a pin) has no matching folder under `packages\`. | Install that version (step 4), fix the typo in the descriptor/pin, or point a version alias there. |
 

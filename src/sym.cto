@@ -24,12 +24,12 @@ fn fatalText(msg: Text): Text [io] = {
 
 fn usageAndExit(): Unit [io] = {
     eprintln("usage:")
-    eprintln("  sym install <package>@<version> <source-file> [<command-filename>]")
-    eprintln("  sym shim add <name> <package>@<version> [<command-filename>]")
+    eprintln("  sym install <package> <version> <source-file> [<command-filename>]")
+    eprintln("  sym shim add <name> <package> <version> [<command-filename>]")
     eprintln("  sym shim remove <name>")
     eprintln("  sym shim list")
-    eprintln("  sym use <package>@<version>")
-    eprintln("  sym pin <tool>@<version> [<dir>]")
+    eprintln("  sym use <package> <version>")
+    eprintln("  sym pin <tool> <version> [<dir>]")
     flush()
     Process.quit(1)
 }
@@ -79,23 +79,17 @@ fn findKeyIn(content: Text, wantedKey: Text): Text? = {
 
 type PkgVer = { package: Text, version: Text }
 
-fn parsePkgVer(s: Text): PkgVer? =
-    match Text.indexOf(s, "@") {
-        Some(i) => Some(PkgVer {
-            package: Text.slice(s, 0, i),
-            version: Text.slice(s, i + 1, Text.len(s))
-        })
-        None => None
-    }
-
-fn requirePkgVer(s: Text): PkgVer [io] =
-    match parsePkgVer(s) {
-        Some(pv) => pv
-        None => {
-            fatal("expected <package>@<version>, got '" ++ s ++ "'")
-            PkgVer { package: "", version: "" }
-        }
-    }
+// package and version are separate arguments, not a "package@version"
+// token -- some shells (confirmed: Ion-win) treat `@` followed by a digit
+// as a variable-expansion sequence, silently mangling an embedded "@1.2.3"
+// before this program ever sees it. Splitting into two plain arguments
+// sidesteps the problem at the source rather than working around any one
+// shell's expansion rules.
+fn requirePkgVer(packageArg: Text?, versionArg: Text?, usage: Text): PkgVer [io] = {
+    let package = unwrapOrFatal(packageArg, usage ++ ": missing <package>")
+    let version = unwrapOrFatal(versionArg, usage ++ ": missing <version>")
+    PkgVer { package: package, version: version }
+}
 
 fn symHome(): Text [io] =
     match getEnv("SYM_HOME") {
@@ -276,7 +270,7 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
         readFile(sourcePath),
         "no source config for '" ++ pv.package ++ "' (expected " ++ sourcePath ++
         ") -- can't fetch without one; pass a local file instead: sym install " ++
-        pv.package ++ "@" ++ pv.version ++ " <source-file>"
+        pv.package ++ " " ++ pv.version ++ " <source-file>"
     )
     let cfg = parseSourceConfig(sourceContent)
     if Text.len(cfg.binaryPath) == 0 then fatal("malformed " ++ sourcePath ++ " (missing binary_path)") else {}
@@ -341,10 +335,10 @@ fn fetchInstall(home: Text, pv: PkgVer): Unit [io] = {
 }
 
 fn cmdInstall(home: Text): Unit [io] = {
-    let pv = requirePkgVer(unwrapOrFatal(arg(2), "install: missing <package>@<version>"))
-    match arg(3) {
+    let pv = requirePkgVer(arg(2), arg(3), "install")
+    match arg(4) {
         Some(source) => {
-            let commandName = arg(4) ?? Path.basename(source)
+            let commandName = arg(5) ?? Path.basename(source)
 
             let destDir = Path.join(Path.join(Path.join(home, "packages"), pv.package), pv.version)
             let madeDir = makeDir(destDir)
@@ -362,8 +356,8 @@ fn cmdInstall(home: Text): Unit [io] = {
 
 fn cmdShimAdd(home: Text): Unit [io] = {
     let name = unwrapOrFatal(arg(3), "shim add: missing <name>")
-    let pv = requirePkgVer(unwrapOrFatal(arg(4), "shim add: missing <package>@<version>"))
-    let commandName = arg(5) ?? (name ++ ".exe")
+    let pv = requirePkgVer(arg(4), arg(5), "shim add")
+    let commandName = arg(6) ?? (name ++ ".exe")
 
     let binDir = Path.join(home, "bin")
     let madeBin = makeDir(binDir)
@@ -407,7 +401,7 @@ fn cmdShimList(home: Text): Unit [io] = {
 }
 
 fn cmdUse(home: Text): Unit [io] = {
-    let pv = requirePkgVer(unwrapOrFatal(arg(2), "use: missing <package>@<version>"))
+    let pv = requirePkgVer(arg(2), arg(3), "use")
     let shimsDir = Path.join(home, "shims")
     let files = listTomlFiles(shimsDir)
     var updated = 0
@@ -425,8 +419,8 @@ fn cmdUse(home: Text): Unit [io] = {
 }
 
 fn cmdPin(): Unit [io] = {
-    let pv = requirePkgVer(unwrapOrFatal(arg(2), "pin: missing <tool>@<version>"))
-    let dir = match arg(3) {
+    let pv = requirePkgVer(arg(2), arg(3), "pin")
+    let dir = match arg(4) {
         Some(d) => d
         None => getCurrentDir()
     }

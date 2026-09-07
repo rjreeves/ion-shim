@@ -104,7 +104,7 @@ fn main(): Unit [io] = {
                 fatal(
                     "'" ++ exeName ++ "' is pinned to " ++ v ++ " in sym.toml, but has never " ++
                     "been shimmed globally (no " ++ descriptorPath ++ ") -- run 'sym shim add " ++
-                    exeName ++ " <package>@" ++ v ++ "' first"
+                    exeName ++ " <package> " ++ v ++ "' first"
                 )
                 ""
             }

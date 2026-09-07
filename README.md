@@ -41,11 +41,22 @@ deliberately lives outside it — it's the one-time build output that
 every per-tool copy is stamped from, not something meant to run under
 its own name. Keeping it here (rather than wherever it happened to be
 built) means adding a new tool never requires recompiling from Certo
-source: `sym shim add <name> <package>@<version>` just copies
+source: `sym shim add <name> <package> <version>` just copies
 `shim\sym_shim.exe` to `bin\<name>.exe` and writes the descriptor — no
-`PATH` change, ever. Switching versions (`sym use certo@1.7`) is a
+`PATH` change, ever. Switching versions (`sym use certo 1.7`) is a
 single-line edit to `shims\certo.toml`; the shim binary itself never
 changes.
+
+Every `sym` command takes `package` and `version` as two plain,
+space-separated arguments (`sym use certo 1.9.0`), never joined as
+`certo@1.9.0`. This wasn't the original design — it changed after a
+real failure using `sym` from inside Ion-win: its shell treats `@`
+followed by a digit as a variable-expansion sequence (like `$1` in
+other shells), so `certo@1.9.0` silently became `certo.9.0` before
+`sym` ever saw it, with a shell-level "variable does not exist" error
+on top. Splitting into two arguments removes the character shells have
+opinions about, rather than working around any one shell's expansion
+rules.
 
 ## Descriptor format (`shims\<name>.toml`)
 
@@ -100,7 +111,7 @@ bundle rather than versioning `rustc` and `cargo` separately.
 That leaves exactly one real problem, and it belongs to whatever
 installs packages, not the shim:
 
-- **Coherent switching.** `sym use certo@1.9.0` needs to move every
+- **Coherent switching.** `sym use certo 1.9.0` needs to move every
   descriptor with `package = "certo"` to `1.9.0` together, so `certo`
   and `certo-fmt` never end up on different versions. This needs no
   extra bookkeeping beyond what already exists — since every descriptor
@@ -153,7 +164,7 @@ building the same project at different times could silently get
 different versions. Fine for a global default; worth avoiding in a
 project pin meant to be reproducible.
 
-## Fetching a package (`sym install <package>@<version>`, no local file)
+## Fetching a package (`sym install <package> <version>`, no local file)
 
 `sym install` takes an already-downloaded file if you give it one; if
 you don't, it fetches instead, using a per-package config that says how:
@@ -333,7 +344,7 @@ name means. Concretely:
   anyway, the shim doesn't silently ignore the pin — it fails with a
   specific message naming the orphaned pin (`'flux' is pinned to 1.2.0
   in sym.toml, but has never been shimmed globally ... run 'sym shim
-  add flux <package>@1.2.0' first`) rather than the generic "no shim
+  add flux <package> 1.2.0' first`) rather than the generic "no shim
   descriptor" error, since that would give no hint the pin exists at all.
 - Whichever version wins, "is it actually installed" is checked the
   same way regardless of where the version came from.
