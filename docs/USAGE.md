@@ -17,11 +17,22 @@ around `sym` if you'd rather not depend on it.
 
 You need the `certo` compiler on `PATH` to build the shim. It's not
 packaged anywhere conventional (no apt/choco/winget entry) — build it
-from source:
+from source, pinned to the exact commit `sym`/`sym_shim` are verified
+against:
 
 ```bash
-cargo install --git https://github.com/rjreeves/Certo certo
+cargo install --git https://github.com/rjreeves/Certo --rev f0254c334efeae2404696d64da103ab306658433 certo
 ```
+
+That commit is the first one with everything this project needs
+(`Process.execInherit`, `getCurrentDir`, `HttpResponse.bodyBytes`) —
+verified by building both `.cto` files against it directly. Certo has
+exactly one tagged release (`v0.1.0`, June 2026), predating all three,
+so a release build won't work here; pinning to a commit instead of
+`--branch master` means a future, unrelated change to Certo's `master`
+can't silently break this project's build. Re-pin to a newer commit
+only after checking it still builds both `src/sym.cto` and
+`src/sym_shim.cto` cleanly.
 
 (Note: `certo` is a Cargo workspace with several binary-producing
 crates, so the package name `certo` must be passed explicitly — `--bin

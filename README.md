@@ -359,6 +359,10 @@ Copy (or hardlink) `sym_shim.exe` to `%LOCALAPPDATA%\Sym\bin\<name>.exe`
 for each tool it should front. At runtime it reads its own `argv[0]`
 to figure out which name it was invoked as.
 
+`certo` itself needs to come from a pinned commit, not Certo's `master`
+branch or its one existing release — see [docs/USAGE.md](docs/USAGE.md)'s
+Prerequisites section for the exact command and why.
+
 ## Stdlib gaps this surfaced
 
 Building a *transparent* shim exposed several real gaps in Certo's
