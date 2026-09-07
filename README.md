@@ -5,6 +5,12 @@ trick: one tiny executable, copied under many names, that resolves the
 active version of whatever it was invoked as and re-execs it — with real
 stdin/stdout/stderr passthrough and exact exit-code propagation.
 
+`src/ion.cto` builds a small `ion` CLI implementing the management side
+— `install`/`use`/`shim add`/`shim remove`/`shim list`/`pin` — that
+writes and reads exactly the files described below. It doesn't fetch
+anything yet (`ion install` takes an already-obtained local file, not a
+URL), so acquisition is still a separate, unimplemented concern.
+
 This README covers the design; for step-by-step setup see
 [docs/USAGE.md](docs/USAGE.md), and for a line-by-line explanation of
 `src/ion_shim.cto` see [docs/CODE-WALKTHROUGH.md](docs/CODE-WALKTHROUGH.md).
@@ -98,7 +104,8 @@ installs packages, not the shim:
   and `certo-fmt` never end up on different versions. This needs no
   extra bookkeeping beyond what already exists — since every descriptor
   already records its own `package`, switching just means scanning
-  `shims\*.toml` for matches and rewriting all of them.
+  `shims\*.toml` for matches and rewriting all of them. `src/ion.cto`'s
+  `use` command does exactly this today.
 - **First install still needs a manifest.** Before any descriptors
   exist, something has to know that `certo@1.8.0` exposes `certo`,
   `certo-fmt`, `certo-lsp`, `xeq`, etc., so it knows which names to shim

@@ -1,0 +1,293 @@
+module ion
+
+import Stdlib.Core
+import Stdlib.Text
+import Stdlib.File
+import Stdlib.Path
+import Stdlib.Env
+import Stdlib.Collections
+import Stdlib.Bytes
+
+fn fatal(msg: Text): Unit [io] = {
+    eprintln("ion: " ++ msg)
+    flush()
+    Process.quit(1)
+}
+
+fn usageAndExit(): Unit [io] = {
+    eprintln("usage:")
+    eprintln("  ion install <package>@<version> <source-file> [<command-filename>]")
+    eprintln("  ion shim add <name> <package>@<version> [<command-filename>]")
+    eprintln("  ion shim remove <name>")
+    eprintln("  ion shim list")
+    eprintln("  ion use <package>@<version>")
+    eprintln("  ion pin <tool>@<version> [<dir>]")
+    flush()
+    Process.quit(1)
+}
+
+// Same `??`-avoidance rule as ion_shim.cto: `match` for any fallback with
+// an [io] effect, since `??` evaluates its right-hand side unconditionally.
+fn unwrapOrFatal(opt: Text?, msg: Text): Text [io] =
+    match opt {
+        Some(v) => v
+        None => {
+            fatal(msg)
+            ""
+        }
+    }
+
+fn stripQuotes(s: Text): Text =
+    if Text.startsWith(s, "\"") and Text.endsWith(s, "\"") and Text.len(s) >= 2
+    then Text.slice(s, 1, Text.len(s) - 1)
+    else s
+
+type KeyValue = { key: Text, value: Text }
+
+fn parseKVLine(line: Text): KeyValue? = {
+    let trimmed = Text.trim(line)
+    if Text.len(trimmed) == 0 or Text.startsWith(trimmed, "#") then None
+    else match Text.indexOf(trimmed, "=") {
+        Some(eq) => Some(KeyValue {
+            key: Text.trim(Text.slice(trimmed, 0, eq)),
+            value: stripQuotes(Text.trim(Text.slice(trimmed, eq + 1, Text.len(trimmed))))
+        })
+        None => None
+    }
+}
+
+type PkgVer = { package: Text, version: Text }
+
+fn parsePkgVer(s: Text): PkgVer? =
+    match Text.indexOf(s, "@") {
+        Some(i) => Some(PkgVer {
+            package: Text.slice(s, 0, i),
+            version: Text.slice(s, i + 1, Text.len(s))
+        })
+        None => None
+    }
+
+fn requirePkgVer(s: Text): PkgVer [io] =
+    match parsePkgVer(s) {
+        Some(pv) => pv
+        None => {
+            fatal("expected <package>@<version>, got '" ++ s ++ "'")
+            PkgVer { package: "", version: "" }
+        }
+    }
+
+fn ionHome(): Text [io] =
+    match getEnv("ION_HOME") {
+        Some(v) => v
+        None => match getEnv("LOCALAPPDATA") {
+            Some(v) => Path.join(v, "Ion")
+            None => {
+                fatal("neither ION_HOME nor LOCALAPPDATA is set")
+                ""
+            }
+        }
+    }
+
+// Binary-safe copy -- readFile/writeFile (Text) would silently truncate a
+// real executable at its first embedded NUL byte, same class of bug fixed
+// in Stdlib.Http's bodyBytes accessor.
+fn copyBytes(from: Text, to: Text): Bool [io] =
+    match readFileBytes(from) {
+        Some(b) => writeFileBytes(to, b)
+        None => false
+    }
+
+fn writeDescriptor(path: Text, package: Text, command: Text, version: Text): Bool [io] =
+    writeFile(path,
+        "package = \"" ++ package ++ "\"\n" ++
+        "command = \"" ++ command ++ "\"\n" ++
+        "version = \"" ++ version ++ "\"\n"
+    )
+
+type Descriptor = { package: Text, command: Text, version: Text }
+
+fn parseDescriptor(content: Text): Descriptor = {
+    var package = ""
+    var command = ""
+    var version = ""
+    for line in Text.split(content, "\n") {
+        match parseKVLine(line) {
+            Some(kv) => {
+                match kv.key {
+                    "package" => { package = kv.value }
+                    "command" => { command = kv.value }
+                    "version" => { version = kv.value }
+                    _ => {}
+                }
+            }
+            None => {}
+        }
+    }
+    Descriptor { package: package, command: command, version: version }
+}
+
+// Rewrites `key`'s value if present (preserving every other line, including
+// comments), or appends a new "key = value" line if absent.
+fn upsertLine(content: Text, key: Text, value: Text): Text = {
+    if Text.len(Text.trim(content)) == 0 then key ++ " = \"" ++ value ++ "\"\n"
+    else {
+        var found = false
+        var result = ""
+        for line in Text.split(content, "\n") {
+            match parseKVLine(line) {
+                Some(kv) => {
+                    if kv.key == key then {
+                        result = result ++ key ++ " = \"" ++ value ++ "\"\n"
+                        found = true
+                    } else {
+                        result = result ++ line ++ "\n"
+                    }
+                }
+                None => {
+                    if Text.len(Text.trim(line)) == 0 then {}
+                    else { result = result ++ line ++ "\n" }
+                }
+            }
+        }
+        if found then result else result ++ key ++ " = \"" ++ value ++ "\"\n"
+    }
+}
+
+fn listTomlFiles(dir: Text): List<Text> = {
+    var result: List<Text> = List.empty()
+    match listDir(dir) {
+        Some(entries) => {
+            for e in entries {
+                if Text.endsWith(e, ".toml") then { result = List.push(result, e) } else {}
+            }
+        }
+        None => {}
+    }
+    result
+}
+
+fn cmdInstall(home: Text): Unit [io] = {
+    let pv = requirePkgVer(unwrapOrFatal(arg(2), "install: missing <package>@<version>"))
+    let source = unwrapOrFatal(arg(3), "install: missing <source-file>")
+    let commandName = arg(4) ?? Path.basename(source)
+
+    let destDir = Path.join(Path.join(Path.join(home, "packages"), pv.package), pv.version)
+    let madeDir = makeDir(destDir)
+    if !madeDir then fatal("could not create " ++ destDir) else {}
+
+    let dest = Path.join(destDir, commandName)
+    let copied = copyBytes(source, dest)
+    if !copied then fatal("failed to install: could not read '" ++ source ++ "' or write '" ++ dest ++ "'") else {}
+
+    println("installed " ++ pv.package ++ "@" ++ pv.version ++ " -> " ++ dest)
+}
+
+fn cmdShimAdd(home: Text): Unit [io] = {
+    let name = unwrapOrFatal(arg(3), "shim add: missing <name>")
+    let pv = requirePkgVer(unwrapOrFatal(arg(4), "shim add: missing <package>@<version>"))
+    let commandName = arg(5) ?? (name ++ ".exe")
+
+    let binDir = Path.join(home, "bin")
+    let madeBin = makeDir(binDir)
+    if !madeBin then fatal("could not create " ++ binDir) else {}
+
+    let masterShim = Path.join(Path.join(home, "shim"), "ion_shim.exe")
+    let binPath = Path.join(binDir, name ++ ".exe")
+    let copied = copyBytes(masterShim, binPath)
+    if !copied then fatal("could not copy shim from '" ++ masterShim ++ "' -- is it built and in place?") else {}
+
+    let shimsDir = Path.join(home, "shims")
+    let madeShims = makeDir(shimsDir)
+    if !madeShims then fatal("could not create " ++ shimsDir) else {}
+
+    let descPath = Path.join(shimsDir, name ++ ".toml")
+    let wrote = writeDescriptor(descPath, pv.package, commandName, pv.version)
+    if !wrote then fatal("failed to write " ++ descPath) else {}
+
+    println("shimmed '" ++ name ++ "' -> " ++ pv.package ++ "@" ++ pv.version ++ " (" ++ commandName ++ ")")
+}
+
+fn cmdShimRemove(home: Text): Unit [io] = {
+    let name = unwrapOrFatal(arg(3), "shim remove: missing <name>")
+    let binPath = Path.join(Path.join(home, "bin"), name ++ ".exe")
+    let descPath = Path.join(Path.join(home, "shims"), name ++ ".toml")
+    let removedBin = deleteFile(binPath)
+    let removedDesc = deleteFile(descPath)
+    println("removed '" ++ name ++ "' (bin: " ++ boolToText(removedBin) ++ ", descriptor: " ++ boolToText(removedDesc) ++ ")")
+}
+
+fn cmdShimList(home: Text): Unit [io] = {
+    let shimsDir = Path.join(home, "shims")
+    let files = listTomlFiles(shimsDir)
+    if List.len(files) == 0 then println("(no shims)") else {}
+    for f in files {
+        let name = Path.stem(f)
+        let content = unwrapOrFatal(readFile(Path.join(shimsDir, f)), "could not read " ++ f)
+        let d = parseDescriptor(content)
+        println(name ++ " -> " ++ d.package ++ "@" ++ d.version ++ " (" ++ d.command ++ ")")
+    }
+}
+
+fn cmdUse(home: Text): Unit [io] = {
+    let pv = requirePkgVer(unwrapOrFatal(arg(2), "use: missing <package>@<version>"))
+    let shimsDir = Path.join(home, "shims")
+    let files = listTomlFiles(shimsDir)
+    var updated = 0
+    for f in files {
+        let path = Path.join(shimsDir, f)
+        let content = unwrapOrFatal(readFile(path), "could not read " ++ path)
+        let d = parseDescriptor(content)
+        if d.package == pv.package then {
+            let newContent = upsertLine(content, "version", pv.version)
+            let ok = writeFile(path, newContent)
+            if ok then { updated = updated + 1 } else {}
+        } else {}
+    }
+    println("updated " ++ intToText(updated) ++ " shim(s) for " ++ pv.package ++ "@" ++ pv.version)
+}
+
+fn cmdPin(): Unit [io] = {
+    let pv = requirePkgVer(unwrapOrFatal(arg(2), "pin: missing <tool>@<version>"))
+    let dir = match arg(3) {
+        Some(d) => d
+        None => getCurrentDir()
+    }
+    let path = Path.join(dir, "ion.toml")
+    let existing = match readFile(path) {
+        Some(c) => c
+        None => ""
+    }
+    let newContent = upsertLine(existing, pv.package, pv.version)
+    let ok = writeFile(path, newContent)
+    if !ok then fatal("failed to write " ++ path) else {}
+    println("pinned " ++ pv.package ++ " = " ++ pv.version ++ " in " ++ path)
+}
+
+fn main(): Unit [io] = {
+    if argCount() < 2 then usageAndExit() else {}
+    let cmd = unwrapOrFatal(arg(1), "internal error: missing command")
+
+    match cmd {
+        "install" => {
+            let home = ionHome()
+            cmdInstall(home)
+        }
+        "use" => {
+            let home = ionHome()
+            cmdUse(home)
+        }
+        "pin" => cmdPin()
+        "shim" => {
+            if argCount() < 3 then usageAndExit() else {}
+            let home = ionHome()
+            let sub = unwrapOrFatal(arg(2), "internal error: missing shim subcommand")
+            match sub {
+                "add" => cmdShimAdd(home)
+                "remove" => cmdShimRemove(home)
+                "list" => cmdShimList(home)
+                _ => usageAndExit()
+            }
+        }
+        _ => usageAndExit()
+    }
+}

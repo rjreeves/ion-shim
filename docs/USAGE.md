@@ -4,14 +4,15 @@ This is a practical, step-by-step guide to setting up and using the shim.
 For the design rationale behind each of these behaviors, see the main
 [README](../README.md); this document is about *doing*, not *why*.
 
-**Important scope note up front:** this repo ships exactly one thing —
-the shim binary itself. There is no `ion` command-line tool yet that
-runs `ion install`, `ion use`, or `ion shim add` for you. Those are
-described throughout this guide as the *intended* commands of a
-management layer that doesn't exist yet; every section also shows the
-manual filesystem operations that stand in for them today. If you're
-scripting this yourself, that's exactly what such a script would need
-to do.
+**Scope note:** this repo ships two things — the shim binary
+(`src/ion_shim.cto`) and a small `ion` CLI (`src/ion.cto`) implementing
+`install`/`use`/`shim add`/`shim remove`/`shim list`/`pin`. What `ion`
+does **not** do yet is fetch anything — `ion install` takes an
+already-obtained local file, not a URL or package name to download.
+Every section below shows both the `ion` command and, underneath it,
+the raw filesystem operations it performs — useful for understanding
+what's actually happening, or for scripting around `ion` if you'd
+rather not depend on it.
 
 ## 1. Prerequisites
 
@@ -27,14 +28,18 @@ cargo install --git https://github.com/rjreeves/Certo certo
 crates, so the package name `certo` must be passed explicitly — `--bin
 certo` alone is ambiguous and fails.)
 
-## 2. Build the shim
+## 2. Build the shim and the installer
 
 ```bash
 certo src/ion_shim.cto -o ion_shim.exe
+certo src/ion.cto -o ion.exe
 ```
 
-This produces one native `.exe`. It's generic — it doesn't know which
-tool it's fronting until you copy it under a specific name (step 4).
+`ion_shim.exe` is generic — it doesn't know which tool it's fronting
+until you copy it under a specific name (step 5). `ion.exe` is the CLI
+that does that copying and the rest of the bookkeeping for you; keep it
+wherever's convenient on your own `PATH` (it isn't part of the `Ion\`
+layout itself, unlike the shim).
 
 ## 3. Set up the directory layout
 
@@ -74,31 +79,43 @@ change ever required, no matter how many tools you shim later.
 
 ## 4. Install a real version of a tool
 
-Put the actual binary you want to manage under
-`packages\<package>\<version>\<command>`. For example, to manage Certo
-itself:
+You already need the actual binary on disk somewhere — `ion install`
+places it, it doesn't fetch it:
+
+```bash
+ion install certo@1.8.0 C:\path\to\certo-1.8.0.exe certo.exe
+```
+
+This copies (binary-safe — see the code walkthrough for why that
+matters) the given file to `packages\certo\1.8.0\certo.exe`, creating
+the version folder if needed. The trailing `certo.exe` names the file
+inside that folder; if omitted, it defaults to the source file's own
+name. Equivalent by hand:
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:LOCALAPPDATA\Ion\packages\certo\1.8.0"
 Copy-Item "C:\path\to\certo-1.8.0.exe" "$env:LOCALAPPDATA\Ion\packages\certo\1.8.0\certo.exe"
 ```
 
-(A real `ion install certo@1.8.0` would fetch and place this for you —
-today, you place it yourself.)
-
 ## 5. Shim the tool
 
-Two things, both one-time per tool name:
+```bash
+ion shim add certo certo@1.8.0
+```
 
-**a. Copy the master shim binary under the tool's name:**
+This copies `shim\ion_shim.exe` to `bin\certo.exe` (always re-copying,
+even if already present — cheap, and picks up a rebuilt shim
+automatically) and writes `shims\certo.toml`. An optional fourth
+argument names the command inside the version folder if it isn't
+`<name>.exe` (e.g. `ion shim add certo certo@1.8.0 certo-cli.exe`).
+Equivalent by hand:
 
 ```powershell
 Copy-Item "$env:LOCALAPPDATA\Ion\shim\ion_shim.exe" "$env:LOCALAPPDATA\Ion\bin\certo.exe"
 ```
 
-**b. Write its descriptor** at `shims\certo.toml`:
-
 ```toml
+# shims\certo.toml
 package = "certo"
 command = "certo.exe"
 version = "1.8.0"
@@ -110,11 +127,22 @@ nesting), `#` starts a full-line comment, blank lines are ignored,
 quotes around the value are optional.
 
 That's it — `certo --version` typed anywhere now runs through the shim
-to the real `1.8.0` binary.
+to the real `1.8.0` binary. `ion shim list` prints every currently
+shimmed name; `ion shim remove certo` deletes both `bin\certo.exe` and
+`shims\certo.toml` (leaving installed packages alone, since another
+name might still reference the same package/version).
 
 ## 6. Switch versions
 
-Install the new version the same way as step 4, then edit **only** the
+Install the new version the same way as step 4, then:
+
+```bash
+ion use certo@1.9.0
+```
+
+This rewrites `version` in **every** `shims\*.toml` whose `package`
+matches — one command, whether `certo` is fronted by one name or, per
+the toolchain design, several. Equivalent by hand: edit just the
 `version` line in `shims\certo.toml`:
 
 ```toml
@@ -124,12 +152,21 @@ version = "1.9.0"
 ```
 
 No rebuild, no PATH change, no re-copying the shim. This is the entire
-value of the design — switching is a one-line text edit.
+value of the design — switching is a one-line text edit, whether you
+make it yourself or `ion use` makes it for you.
 
 ## 7. Pin a version per-project
 
-Drop an `ion.toml` in a project's root to override the global version
-for just that directory tree:
+```bash
+cd my-project
+ion pin certo@1.7.0
+```
+
+Writes (or updates, preserving every other line including comments) an
+`ion.toml` in the current directory to override the global version for
+just that directory tree. Pass a directory as a third argument to pin
+somewhere other than the current one: `ion pin certo@1.7.0 C:\path\to\project`.
+By hand, that's just:
 
 ```toml
 # my-project/ion.toml
